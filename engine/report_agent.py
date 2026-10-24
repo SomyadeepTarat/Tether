@@ -30,6 +30,8 @@ def plan_next_action(client, contract, session_id, references, action_id, existi
         feedback = {"rejected_section": previous_action.get("arguments"),
                     "rejected_effects": previous_action.get("declared_effects"),
                     "validation": previous_feedback.get("validation")}
+    authorized = [r for r in references if source_authorized(r, active.allowed_topics[0], contract)]
+    evidence_appendix = "\n".join(f"{r.summary} [{r.reference_id}]" for r in authorized)
     payload = {"project_id": contract.project_id, "contract_version": contract.version,
                "milestone_id": active.id, "topic": active.allowed_topics[0], "contract": contract.model_dump(mode="json"), "session_id": session_id,
                "action_id": action_id, "existing_sections": list(existing_sections),
@@ -37,14 +39,15 @@ def plan_next_action(client, contract, session_id, references, action_id, existi
                "untrusted_task_note": task_note,
                "validated_handoff": handoff.model_dump(mode="json") if handoff else None,
                "requested_section_id": active.allowed_topics[0].value.lower() + "_comparison",
+               "required_verbatim_evidence_appendix": evidence_appendix if synthesized else None,
                "requirements": [
                    "Use project_id, session_id, action_id, version and active milestone from this request exactly. Include agent=REPORT and action_type=WRITE_SECTION explicitly.",
                    "Use requested_section_id for arguments.section_id. Put that EXACT same lowercase ID in sections_created if new, otherwise sections_modified. The other list is empty.",
                    "Content starts with SYNTHETIC_DEMONSTRATION. Include verbatim evidence summaries with reference IDs in brackets, including numerical quote sentences.",
                    ("Produce a comparison table or justified recommendation for the active topic; append exact cited evidence quotations. Synthesized prose will require human review."
                     if synthesized else "Do not abbreviate summaries, add headings, or use numbered lists."),
+                   "When required_verbatim_evidence_appendix is supplied, append that entire text unchanged INSIDE arguments.content after your table or recommendation. Putting quotations only in numerical_claims does not satisfy this requirement. Every numerical_claims.quote must also occur verbatim in arguments.content.",
                    "For COST, include actual cost summary sentences in content, not just provider names or citations. numerical_claims MUST NOT BE EMPTY for COST or whenever numerical values occur. Verbatim numerical quotations STILL require numerical_claims. For EVERY cost record used: add an object with value from numerical_values, reference_id, and quote equal to the whole summary.",
                    "reference_ids_used contains every cited reference ID. topics_introduced contains only the active milestone topic."],
-               "references": [r.model_dump(mode="json") for r in references
-                              if source_authorized(r, active.allowed_topics[0], contract)]}
+               "references": [r.model_dump(mode="json") for r in authorized]}
     return client.generate(AgentAction, SYSTEM, json.dumps(payload))
