@@ -38,7 +38,7 @@ def plan_next_action(client, contract, session_id, references, action_id, existi
                "validated_handoff": handoff.model_dump(mode="json") if handoff else None,
                "requested_section_id": active.allowed_topics[0].value.lower() + "_comparison",
                "requirements": [
-                   "Use project_id, session_id, action_id, version and active milestone from this request exactly.",
+                   "Use project_id, session_id, action_id, version and active milestone from this request exactly. Include agent=REPORT and action_type=WRITE_SECTION explicitly.",
                    "Use requested_section_id for arguments.section_id. Put that EXACT same lowercase ID in sections_created if new, otherwise sections_modified. The other list is empty.",
                    "Content starts with SYNTHETIC_DEMONSTRATION. Include verbatim evidence summaries with reference IDs in brackets, including numerical quote sentences.",
                    ("Produce a comparison table or justified recommendation for the active topic; append exact cited evidence quotations. Synthesized prose will require human review."

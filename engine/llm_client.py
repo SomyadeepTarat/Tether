@@ -44,6 +44,8 @@ def strict_json_schema(schema: type[BaseModel]) -> dict:
     def visit(node):
         if isinstance(node, dict):
             node.pop("default", None)
+            if "const" in node:
+                node["enum"] = [node.pop("const")]
             if node.get("type") == "object":
                 node["required"] = list(node.get("properties", {}))
                 node["additionalProperties"] = False
@@ -88,7 +90,20 @@ class _StructuredClient:
                 # authentication issues or free-tier limits. Malformed requests fail
                 # visibly instead of hiding integration mistakes behind fallback.
                 record["http_status"] = exc.code
+                generation_failure = False
+                if self.provider == "groq" and exc.code == 400:
+                    try:
+                        body = json.loads(exc.read(65536))
+                        generation_failure = body.get("error", {}).get("code") == "json_validate_failed"
+                    except (ValueError, AttributeError, TypeError):
+                        pass
                 exc.close()
+                if generation_failure:
+                    record["error_kind"] = "invalid_structured_output"
+                    if attempt:
+                        raise InferenceError(self.provider, "structured_output_failed_twice") from None
+                    prompt += "\nInclude ALL schema properties, including agent and action_type. Do not omit defaulted fields."
+                    continue
                 raise InferenceError(self.provider, f"http_{exc.code}",
                                      fallback_allowed=exc.code in {401, 403, 408, 429, 498} or exc.code >= 500) from None
             except (URLError, TimeoutError, OSError):

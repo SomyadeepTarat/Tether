@@ -151,3 +151,25 @@ def test_env_file_load_does_not_override_explicit_process_settings(tmp_path,monk
     finally:
         import os
         os.environ.pop('TETHER_ANOTHER_TEST',None)
+
+def test_groq_json_generation_failure_retries_without_hiding_bad_requests(monkeypatch):
+    count=0
+    def respond(request,timeout,**kwargs):
+        nonlocal count
+        count+=1
+        if count==1:
+            raise HTTPError(request.full_url,400,'Bad Request',{},io.BytesIO(
+                b'{"error":{"code":"json_validate_failed","message":"Missing agent"}}'))
+        return groq_response()
+    monkeypatch.setattr(adapter,'urlopen',respond)
+    c=GroqClient(api_key='test-only')
+    assert c.generate(ValidationResult,'system','prompt').decision=='ALLOW'
+    assert len(c.calls)==2 and c.calls[0]['error_kind']=='invalid_structured_output'
+    assert c.calls[1]['schema_valid']
+
+
+def test_literal_properties_have_single_option_enum_for_groq():
+    schema=strict_json_schema(AgentAction)
+    assert schema['properties']['agent']['enum']==['REPORT']
+    assert schema['properties']['action_type']['enum']==['WRITE_SECTION']
+    assert 'const' not in schema['properties']['agent']
