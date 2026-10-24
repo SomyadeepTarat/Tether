@@ -39,6 +39,26 @@ def inference_failure_message(exc, client=None):
     if any(c.get('provider') == 'groq' and c.get('error_kind') == 'missing_credentials' for c in calls):
         return 'Groq API key is missing. Add GROQ_API_KEY to the backend .env file and restart FastAPI. The local backup did not produce a result.'
     kind = getattr(exc, 'kind', '')
+    provider = getattr(exc, 'provider', '')
+    if provider == 'ollama':
+        local = {
+            'connection_or_timeout': 'Local Ollama is unavailable or timed out. Start Ollama and install the configured model with ollama pull qwen3:4b. Specialist sessions require local Ollama.',
+            'http_404': 'Ollama could not find the configured model. Run ollama pull qwen3:4b, or install the model named in OLLAMA_MODEL.',
+            'structured_output_failed_twice': 'The local model returned invalid structured output twice. No proposal was committed.',
+        }.get(kind, 'Local Ollama inference failed. Check the local server and configured model.')
+        hosted_kind = next((c.get('error_kind') for c in reversed(calls)
+                            if c.get('provider') == 'groq' and c.get('error_kind')), None)
+        if hosted_kind:
+            primary = {
+                'http_429': 'Groq rate limit reached. Wait for your free-plan limit to reset before retrying.',
+                'http_401': 'Groq rejected the API key.',
+                'http_403': 'Groq denied account or model access.',
+                'structured_output_failed_twice': 'Groq returned invalid structured output twice.',
+                'connection_or_timeout': 'Groq could not be reached or timed out.',
+                'tls_verification_failed': 'Groq TLS certificate verification failed. Check your system certificates or SSL_CERT_FILE configuration.',
+            }.get(hosted_kind, 'The Groq request failed.')
+            return primary + ' The local backup also failed. ' + local + ' Retry resumes the same saved action key.'
+        return local + ' Retry resumes the same saved action key.'
     messages = {
         'missing_credentials': 'Groq API key is missing. Add GROQ_API_KEY to the backend .env file and restart FastAPI.',
         'http_401': 'Groq rejected the API key. Check the backend GROQ_API_KEY and restart FastAPI.',
@@ -47,6 +67,7 @@ def inference_failure_message(exc, client=None):
         'http_400': 'Groq rejected the request format or model settings. Inspect the recorded attempt status.',
         'http_404': 'The configured Groq model or endpoint was not found.',
         'connection_or_timeout': 'The inference provider could not be reached. Check connectivity and provider availability.',
+        'tls_verification_failed': 'Groq TLS certificate verification failed. Check your system certificates or SSL_CERT_FILE configuration; do not disable certificate verification.',
         'provider_refusal': 'The inference provider declined this request. No proposal was committed.',
         'structured_output_failed_twice': 'The model did not return valid structured output after two attempts. No proposal was committed.',
     }

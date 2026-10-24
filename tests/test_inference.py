@@ -173,3 +173,43 @@ def test_literal_properties_have_single_option_enum_for_groq():
     assert schema['properties']['agent']['enum']==['REPORT']
     assert schema['properties']['action_type']['enum']==['WRITE_SECTION']
     assert 'const' not in schema['properties']['agent']
+
+def test_groq_preserves_platform_trust_and_adds_certifi(monkeypatch):
+    import ssl
+    from unittest.mock import Mock
+    context=Mock()
+    factory=Mock(return_value=context)
+    monkeypatch.delenv('SSL_CERT_FILE',raising=False)
+    monkeypatch.setattr(ssl,'create_default_context',factory)
+    def respond(request,timeout,**kwargs):
+        assert kwargs['context'] is context
+        return groq_response()
+    monkeypatch.setattr(adapter,'urlopen',respond)
+    GroqClient(api_key='test-only').generate(ValidationResult,'s','p')
+    factory.assert_called_once_with(cafile=None)
+    context.load_verify_locations.assert_called_once_with(cafile=adapter.certifi.where())
+
+
+def test_explicit_ca_configuration_is_respected(monkeypatch):
+    import ssl
+    from unittest.mock import Mock
+    context=Mock();factory=Mock(return_value=context)
+    monkeypatch.setenv('SSL_CERT_FILE','explicit-ca.pem')
+    monkeypatch.setattr(ssl,'create_default_context',factory)
+    monkeypatch.setattr(adapter,'urlopen',lambda *a,**k:groq_response())
+    GroqClient(api_key='test-only').generate(ValidationResult,'s','p')
+    factory.assert_called_once_with(cafile='explicit-ca.pem')
+    context.load_verify_locations.assert_not_called()
+
+
+@pytest.mark.parametrize('wrapped',[True,False])
+def test_tls_failure_is_distinct_and_sanitized(monkeypatch,wrapped):
+    import ssl
+    error=ssl.SSLCertVerificationError('private certificate detail')
+    def fail(*a,**k):raise URLError(error) if wrapped else error
+    monkeypatch.setattr(adapter,'urlopen',fail)
+    c=GroqClient(api_key='test-only')
+    with pytest.raises(InferenceError,match='tls_verification_failed') as caught:
+        c.generate(ValidationResult,'s','p')
+    assert 'private certificate' not in str(caught.value)
+    assert c.calls[0]['error_kind']=='tls_verification_failed'

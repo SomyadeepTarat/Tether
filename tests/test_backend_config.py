@@ -57,3 +57,29 @@ def test_auth_error_is_sanitized():
     message = inference_failure_message(error)
     assert 'rejected the API key' in message
     assert 'private-test-value' not in message
+
+@pytest.mark.parametrize('kind,expected',[
+    ('connection_or_timeout','Local Ollama is unavailable'),
+    ('http_404','could not find the configured model'),
+    ('structured_output_failed_twice','local model returned invalid'),
+    ('http_500','Local Ollama inference failed'),
+])
+def test_local_errors_are_not_misreported_as_groq(kind,expected):
+    message=inference_failure_message(InferenceError('ollama',kind))
+    assert expected in message
+    assert 'Groq model' not in message
+    assert 'same saved action key' in message
+
+@pytest.mark.parametrize('kind,expected',[
+    ('http_429','Groq rate limit reached'),
+    ('http_401','Groq rejected the API key'),
+    ('http_403','Groq denied account'),
+    ('structured_output_failed_twice','Groq returned invalid structured'),
+])
+def test_primary_failure_survives_backup_failure(kind,expected):
+    client=SimpleNamespace(calls=[{'provider':'groq','error_kind':kind},
+                                 {'provider':'ollama','error_kind':'connection_or_timeout'}])
+    message=inference_failure_message(InferenceError('ollama','connection_or_timeout'),client)
+    assert expected in message
+    assert 'backup also failed' in message
+    assert 'Local Ollama' in message

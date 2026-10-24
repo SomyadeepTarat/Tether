@@ -379,3 +379,35 @@ def test_complete_merged_workflow_through_v2_and_all_milestones(web):
         versions=resumed.get(f'/api/projects/{project}/contracts').json()
         assert len(versions)==2 and versions[-1]['milestones'][0]['status']=='ACTIVE'
         assert resumed.post(f'/api/sessions/{next_session}/step',json={}).status_code==409
+
+@pytest.mark.parametrize('primary_kind,local_kind',[
+    ('http_429','connection_or_timeout'),
+    ('http_401','http_404'),
+    ('structured_output_failed_twice','connection_or_timeout'),
+])
+def test_provider_failure_is_persisted_and_retry_recovers(web,primary_kind,local_kind):
+    from engine.llm_client import InferenceError
+    class FailedProviders:
+        calls=[]
+        def generate(self,*args):
+            self.calls=[{'provider':'groq','error_kind':primary_kind},
+                        {'provider':'ollama','error_kind':local_kind}]
+            raise InferenceError('ollama',local_kind)
+    project,session=project_session(web)
+    with patch.object(api,'create_client',return_value=FailedProviders()):
+        failed=web.post(f'/api/sessions/{session}/step',json={})
+    assert failed.status_code==503
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['sessions'][0]['failure_reason']==failed.json()['detail']
+    assert state['artifacts']==[]
+    key=state['sessions'][0]['pending_action']
+    model=Model()
+    with patch.object(api,'create_client',return_value=model):
+        recovered=web.post(f'/api/sessions/{session}/step',json={})
+        replay=web.post(f'/api/sessions/{session}/step',json={'action_id':key})
+    assert recovered.status_code==200 and recovered.json()['committed']
+    assert recovered.json()['action']['action_id']==key
+    assert replay.json()['replayed'] and model.count==1
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['sessions'][0]['failure_reason'] is None
+    assert len(state['artifacts'])==1

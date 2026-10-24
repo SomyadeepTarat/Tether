@@ -1,4 +1,4 @@
-import {ArrowRight,Check,CheckCheck,ChevronRight,FileCheck2,FileText,Flag,GitBranch,LoaderCircle,SearchCheck,ShieldCheck,Sparkles,Workflow} from 'lucide-react';
+import {ArrowRight,Check,CheckCheck,ChevronRight,FileCheck2,FileText,Flag,LoaderCircle,SearchCheck,ShieldCheck,Sparkles,Workflow} from 'lucide-react';
 import type {Handoff, Inference, Project} from '@/lib/types';
 
 export function Badge({children,tone='muted'}:{children:React.ReactNode;tone?:string}) {
@@ -45,18 +45,17 @@ export function WorkflowBoard({project,running,handoffs,onReview,onResearch}:{pr
     {name:'Checkpoint',state:last||research?'Saved':session?'Session saved':'Not started'},
   ];
   return <section className="panel workflow-panel">
-    <div className="panel-heading"><h2><Workflow size={16}/>Your agent workflow</h2><Badge tone={running?'blue':failed?'red':pendingResearch||pending?'amber':committed?'green':'muted'}><span className={`dot ${running?'blue':failed?'red':''}`}/>{status}</Badge></div>
+    <div className="panel-heading"><h2><Workflow size={16}/>How it works</h2><Badge tone={running?'blue':failed?'red':pendingResearch||pending?'amber':committed?'green':'muted'}><span className={`dot ${running?'blue':failed?'red':''}`}/>{status}</Badge></div>
     <div className="workflow-canvas">
-      <div className="canvas-label"><span className="dot blue"/> GOAL-ALIGNED EXECUTION <span>{specialists?'SEQUENTIAL SPECIALISTS':'SINGLE AGENT'}</span></div>
       <div className="flow-nodes">
-        <div className={`flow-node ${running?'working':''}`}><span className="node-icon violet"><Sparkles size={21}/></span><small>01 · PROPOSE</small><h3>{specialists?'Research + Report':'Report agent'}</h3><p>Turn evidence into a proposal</p><span className="node-status">{running?<LoaderCircle size={11} className="spin"/>:<span className={`dot ${failed?'red':''}`}/>}{running?'Generating':last?'Proposal recorded':research?'Research recorded':failed?'Retry available':'Ready to work'}</span></div>
+        <div className={`flow-node ${running?'working':''}`}><span className="node-icon violet"><Sparkles size={21}/></span><small>01 · PROPOSE</small><h3>{specialists?'Research + Report':'Report agent'}</h3><p>Generate a proposal</p><span className="node-status">{running?<LoaderCircle size={11} className="spin"/>:<span className={`dot ${failed?'red':''}`}/>}{running?'Generating':last?'Proposal recorded':research?'Research recorded':failed?'Retry available':'Ready to work'}</span></div>
         <span className="flow-connector"><ArrowRight size={14}/></span>
-        <div className="flow-node"><span className="node-icon blue"><SearchCheck size={21}/></span><small>02 · VALIDATE</small><h3>Goal gateway</h3><p>Check scope, sources & effects</p><span className="node-status"><ShieldCheck size={12}/>{pendingResearch?'Research review':last?(last.resolution||last.decision):'Always enforced'}</span></div>
+        <div className="flow-node"><span className="node-icon blue"><SearchCheck size={21}/></span><small>02 · VALIDATE</small><h3>Check goal & evidence</h3><p>Check scope, sources & effects</p><span className="node-status"><ShieldCheck size={12}/>{pendingResearch?'Research review':last?(last.resolution||last.decision):'Always enforced'}</span></div>
         <span className="flow-connector"><ArrowRight size={14}/></span>
-        <div className="flow-node"><span className="node-icon peach"><FileCheck2 size={21}/></span><small>03 · COMMIT</small><h3>Saved report</h3><p>Keep only authorized work</p><span className="node-status"><FileText size={12}/>{project.artifacts.length} saved {project.artifacts.length===1?'section':'sections'}</span></div>
+        <div className="flow-node"><span className="node-icon peach"><FileCheck2 size={21}/></span><small>03 · COMMIT</small><h3>Saved report</h3><p>Save approved sections</p><span className="node-status"><FileText size={12}/>{project.artifacts.length} saved {project.artifacts.length===1?'section':'sections'}</span></div>
       </div>
-      <ol className="workflow-stages" aria-label="Persisted workflow stages">{stages.map(stage=><li key={stage.name}><strong>{stage.name}</strong><span>{stage.state}</span></li>)}</ol>
-      <div className="canvas-footer"><span><ShieldCheck size={13}/>Contract v{project.contract.version} protects every step</span><button onClick={pendingResearch?onResearch:onReview}>{pendingResearch?'Inspect research':'Inspect actions'}<ChevronRight size={13}/></button></div>
+      <details className="secondary-details"><summary>Execution details</summary><ol className="workflow-stages" aria-label="Persisted workflow stages">{stages.map(stage=><li key={stage.name}><strong>{stage.name}</strong><span>{stage.state}</span></li>)}</ol></details>
+      <div className="canvas-footer"><span><ShieldCheck size={13}/>Using contract v{project.contract.version}</span><button onClick={pendingResearch?onResearch:onReview}>{pendingResearch?'Inspect research':'Inspect actions'}<ChevronRight size={13}/></button></div>
     </div>
   </section>;
 }
@@ -70,6 +69,5 @@ export function MilestoneList({project,busy,running,onComplete}:{project:Project
       {m.status==='COMPLETED'?<CheckCheck size={16}/>:<Badge tone={m.status==='ACTIVE'?'blue':'muted'}>{m.status==='ACTIVE'?'In progress':'Pending'}</Badge>}
       {m.status==='ACTIVE'&&project.artifacts.some(a=>a.milestone_id===m.id)&&<button className="text-button" disabled={busy||running} onClick={()=>onComplete(m.id)}>Confirm complete<Check size={12}/></button>}
     </div>)}</div>
-    <div className="panel-note"><GitBranch size={13}/>Progress changes. Your approved contract stays intact.</div>
   </section>;
 }

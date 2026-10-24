@@ -190,6 +190,10 @@ def project_view(current, project):
         result = current.action_result(key)
         artifacts.append(proposal_view(result.action))
     sessions = [dict(zip(('id','project_id','status','created_at','pending_action','mode'), row)) for row in current.db.execute('SELECT id,project,status,created_at,pending_action,mode FROM app_sessions WHERE project=? ORDER BY created_at DESC', (project,))]
+    failures = {e['body'].get('session_id'): e['body'].get('message')
+                for e in timeline if e['kind'] == 'FAILED'}
+    for session in sessions:
+        session['failure_reason'] = failures.get(session['id']) if session['status'] == 'FAILED' else None
     changes = []
     for (key,) in current.db.execute('SELECT id FROM changes WHERE project=? ORDER BY rowid DESC', (project,)):
         saved = current.goal_change(key)
@@ -272,10 +276,11 @@ def step(session: str, body: StepRequest):
                 current.db.execute('UPDATE app_sessions SET status=?,pending_action=? WHERE id=?',(state,None if final else action_id,session))
             return result.model_dump(mode='json')
         except Exception as exc:
+            message = inference_failure_message(exc,client if 'client' in locals() else None)
             with current._transaction():
                 current.db.execute("UPDATE app_sessions SET status='FAILED' WHERE id=?",(session,))
-                current._event(project,'FAILED',{'session_id':session,'action_id':action_id,'message':'Inference or engine execution failed; no unvalidated artifact was committed'})
-            raise HTTPException(503,inference_failure_message(exc,client if 'client' in locals() else None)) from exc
+                current._event(project,'FAILED',{'session_id':session,'action_id':action_id,'message':message})
+            raise HTTPException(503,message) from exc
 
 
 @app.post('/api/actions/{action}/decision')

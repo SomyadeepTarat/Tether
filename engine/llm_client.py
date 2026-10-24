@@ -77,7 +77,14 @@ class _StructuredClient:
                 request = Request(self.endpoint, data=json.dumps(payload).encode(), headers=headers)
                 transport = {}
                 if self.provider == "groq":
-                    transport["context"] = ssl.create_default_context(cafile=os.getenv("SSL_CERT_FILE") or certifi.where())
+                    # Keep platform trust (including Windows-managed roots) and
+                    # supplement it with Mozilla roots. Passing certifi as cafile
+                    # alone discards platform roots on Windows.
+                    custom_ca = os.getenv("SSL_CERT_FILE")
+                    context = ssl.create_default_context(cafile=custom_ca)
+                    if not custom_ca:
+                        context.load_verify_locations(cafile=certifi.where())
+                    transport["context"] = context
                 with urlopen(request, timeout=self.timeout, **transport) as response:
                     raw = json.load(response)
                 record["response"] = raw
@@ -106,7 +113,10 @@ class _StructuredClient:
                     continue
                 raise InferenceError(self.provider, f"http_{exc.code}",
                                      fallback_allowed=exc.code in {401, 403, 408, 429, 498} or exc.code >= 500) from None
-            except (URLError, TimeoutError, OSError):
+            except (URLError, TimeoutError, OSError) as exc:
+                if isinstance(exc, ssl.SSLCertVerificationError) or isinstance(getattr(exc, 'reason', None), ssl.SSLCertVerificationError):
+                    record["error_kind"] = "tls_verification_failed"
+                    raise InferenceError(self.provider, "tls_verification_failed") from None
                 raise InferenceError(self.provider, "connection_or_timeout") from None
             except (ValidationError, KeyError, IndexError, TypeError, json.JSONDecodeError):
                 record["error_kind"] = "invalid_structured_output"
