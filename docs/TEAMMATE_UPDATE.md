@@ -1,5 +1,9 @@
 # Tether implementation update for the full-stack agent
 
+Follow-up: engine lifecycle services are now implemented; read LIFECYCLE_UPDATE.md
+for goal changes, milestone progress, handoffs and new integration methods.
+The provider plan in this document remains current.
+
 User-approved plan change — 24 October 2026. This supersedes the PRD's
 Ollama-only/no-cloud-inference requirement. Other product and authorization
 requirements remain in force. Do not implement Jev or another paid validator.

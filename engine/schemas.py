@@ -109,3 +109,21 @@ class StepResult(Model):
     validation: ValidationResult
     committed: bool
     replayed: bool = False
+
+class GoalChange(Model):
+    change_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    base_version: int = Field(ge=1)
+    added_topics: list[Topic] = Field(min_length=1)
+    added_milestones: list[Milestone] = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+
+class HandoffResult(Model):
+    handoff: AgentHandoff
+    validation: ValidationResult
+    replayed: bool = False
+
+class WorkflowResult(Model):
+    state: Literal["BLOCKED", "AWAITING_REVIEW", "COMPLETED"]
+    handoff: HandoffResult | None = None
+    step: StepResult | None = None

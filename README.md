@@ -62,6 +62,20 @@ select `ollama` to keep inference local.
 
 Agree candidate shared schemas and connect the engine to FastAPI/Next.js. Display
 one genuine action, validation/commit outcome, provider/fallback and persisted
-report; verify restart recovery. Then implement approved goal evolution,
-milestone transitions, specialists, review resolution and independent baseline
-comparison. No complete-product or unmeasured performance claim is made.
+report; verify restart recovery. Integrate the implemented lifecycle services,
+then add review resolution and independent baseline comparison. No complete-product or unmeasured performance claim is made.
+
+## Goal evolution and specialists
+
+Approved additive goal changes, separately persisted milestone status, validated
+Research → Report handoffs and resumption after research are now implemented.
+See [lifecycle integration](docs/LIFECYCLE_UPDATE.md) for the trusted approval
+boundary and methods your backend must integrate.
+
+```sh
+PYTHONPATH=. .venv/bin/python scripts/run_slice.py --mode specialists --provider ollama \
+  --db runtime/specialists.sqlite3 --session S-SPECIALISTS-001 --action A-SPECIALISTS-001
+```
+
+Single-agent mode remains the default. Specialist handoff BLOCK/REVIEW stops the
+workflow; it never bypasses enforcement by switching to another agent path.

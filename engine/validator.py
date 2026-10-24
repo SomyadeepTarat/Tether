@@ -6,6 +6,14 @@ NUMBER = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?![\w])")
 SCOPE = {"SECURITY": r"\b(security|compliance|soc\s*2|hipaa|enterprise governance)\b",
          "SERVERLESS": r"\b(serverless|lambda|cloud functions|azure functions)\b"}
 
+def source_authorized(reference: Reference, topic, contract: GoalContract) -> bool:
+    if reference.topic not in contract.approved_topics:
+        return False
+    if topic in {"COMPARISON", "RECOMMENDATION"}:
+        return reference.topic in {"COST", "DEPLOYMENT", "SERVERLESS"}
+    return reference.topic == topic
+
+
 def validate_action(action: AgentAction, contract: GoalContract, session_id: str,
                     references: list[Reference], existing_sections: set[str] | None = None) -> ValidationResult:
     blocked, review = [], []
@@ -30,7 +38,7 @@ def validate_action(action: AgentAction, contract: GoalContract, session_id: str
     for rid in effects.reference_ids_used:
         if rid not in refs:
             blocked.append(f"Unknown source: {rid}")
-        elif action.topic in {"COST", "DEPLOYMENT", "SERVERLESS"} and refs[rid].topic != action.topic:
+        elif not source_authorized(refs[rid], action.topic, contract):
             blocked.append(f"Source topic mismatch: {rid}")
     content = action.arguments.content
     if "SYNTHETIC_DEMONSTRATION" not in content:
@@ -54,7 +62,7 @@ def validate_action(action: AgentAction, contract: GoalContract, session_id: str
         clean = clean.replace(rid, "")
     if set(NUMBER.findall(clean)) - declared_numbers:
         blocked.append("Undeclared numerical content")
-    if not any(rid in content for rid in effects.reference_ids_used):
+    if not all(rid in content for rid in effects.reference_ids_used):
         review.append("Content does not visibly cite declared sources")
     # Arbitrary paraphrases require human review in this first slice. Exact fixture
     # quotations give a small, auditable automatic path without an LLM self-grader.

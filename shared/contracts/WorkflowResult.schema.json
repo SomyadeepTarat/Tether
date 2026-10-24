@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "AgentAction": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "agent": {
+          "const": "REPORT",
+          "default": "REPORT",
+          "title": "Agent",
+          "type": "string"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "minimum": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "action_type": {
+          "const": "WRITE_SECTION",
+          "default": "WRITE_SECTION",
+          "title": "Action Type",
+          "type": "string"
+        },
+        "milestone_id": {
+          "title": "Milestone Id",
+          "type": "string"
+        },
+        "topic": {
+          "$ref": "#/$defs/Topic"
+        },
+        "declared_effects": {
+          "$ref": "#/$defs/DeclaredEffects"
+        },
+        "arguments": {
+          "$ref": "#/$defs/Section"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "project_id",
+        "session_id",
+        "contract_version",
+        "milestone_id",
+        "topic",
+        "declared_effects",
+        "arguments",
+        "rationale"
+      ],
+      "title": "AgentAction",
+      "type": "object"
+    },
+    "AgentHandoff": {
+      "additionalProperties": false,
+      "properties": {
+        "handoff_id": {
+          "title": "Handoff Id",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "source_agent": {
+          "const": "RESEARCH",
+          "default": "RESEARCH",
+          "title": "Source Agent",
+          "type": "string"
+        },
+        "target_agent": {
+          "const": "REPORT",
+          "default": "REPORT",
+          "title": "Target Agent",
+          "type": "string"
+        },
+        "milestone_id": {
+          "title": "Milestone Id",
+          "type": "string"
+        },
+        "topic": {
+          "$ref": "#/$defs/Topic"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "minItems": 1,
+          "title": "Findings",
+          "type": "array"
+        },
+        "unresolved_questions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Questions",
+          "type": "array"
+        },
+        "completed_work": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Completed Work",
+          "type": "array"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "handoff_id",
+        "project_id",
+        "session_id",
+        "contract_version",
+        "milestone_id",
+        "topic",
+        "findings",
+        "next_action"
+      ],
+      "title": "AgentHandoff",
+      "type": "object"
+    },
+    "DeclaredEffects": {
+      "additionalProperties": false,
+      "properties": {
+        "sections_created": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sections Created",
+          "type": "array"
+        },
+        "sections_modified": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sections Modified",
+          "type": "array"
+        },
+        "topics_introduced": {
+          "items": {
+            "$ref": "#/$defs/Topic"
+          },
+          "title": "Topics Introduced",
+          "type": "array"
+        },
+        "reference_ids_used": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Reference Ids Used",
+          "type": "array"
+        },
+        "numerical_claims": {
+          "items": {
+            "$ref": "#/$defs/NumericalClaim"
+          },
+          "title": "Numerical Claims",
+          "type": "array"
+        }
+      },
+      "required": [
+        "topics_introduced",
+        "reference_ids_used"
+      ],
+      "title": "DeclaredEffects",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "AWS",
+            "AZURE",
+            "GCP"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "reference_id": {
+          "title": "Reference Id",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "provider",
+        "reference_id",
+        "summary"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "HandoffResult": {
+      "additionalProperties": false,
+      "properties": {
+        "handoff": {
+          "$ref": "#/$defs/AgentHandoff"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationResult"
+        },
+        "replayed": {
+          "default": false,
+          "title": "Replayed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "handoff",
+        "validation"
+      ],
+      "title": "HandoffResult",
+      "type": "object"
+    },
+    "NumericalClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "reference_id": {
+          "title": "Reference Id",
+          "type": "string"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "reference_id",
+        "quote"
+      ],
+      "title": "NumericalClaim",
+      "type": "object"
+    },
+    "Section": {
+      "additionalProperties": false,
+      "properties": {
+        "section_id": {
+          "pattern": "^[a-z][a-z0-9_]{0,79}$",
+          "title": "Section Id",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section_id",
+        "content"
+      ],
+      "title": "Section",
+      "type": "object"
+    },
+    "StepResult": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/AgentAction"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationResult"
+        },
+        "committed": {
+          "title": "Committed",
+          "type": "boolean"
+        },
+        "replayed": {
+          "default": false,
+          "title": "Replayed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action",
+        "validation",
+        "committed"
+      ],
+      "title": "StepResult",
+      "type": "object"
+    },
+    "Topic": {
+      "enum": [
+        "COST",
+        "DEPLOYMENT",
+        "COMPARISON",
+        "RECOMMENDATION",
+        "SERVERLESS",
+        "SECURITY"
+      ],
+      "title": "Topic",
+      "type": "string"
+    },
+    "ValidationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "ALLOW",
+            "REVIEW",
+            "BLOCK"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision",
+        "reasons"
+      ],
+      "title": "ValidationResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "state": {
+      "enum": [
+        "BLOCKED",
+        "AWAITING_REVIEW",
+        "COMPLETED"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "handoff": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HandoffResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "step": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StepResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "state"
+  ],
+  "title": "WorkflowResult",
+  "type": "object"
+}

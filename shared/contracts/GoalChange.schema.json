@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "Milestone": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "allowed_topics": {
+          "items": {
+            "$ref": "#/$defs/Topic"
+          },
+          "minItems": 1,
+          "title": "Allowed Topics",
+          "type": "array"
+        },
+        "status": {
+          "default": "PENDING",
+          "enum": [
+            "ACTIVE",
+            "PENDING",
+            "COMPLETED"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "allowed_topics"
+      ],
+      "title": "Milestone",
+      "type": "object"
+    },
+    "Topic": {
+      "enum": [
+        "COST",
+        "DEPLOYMENT",
+        "COMPARISON",
+        "RECOMMENDATION",
+        "SERVERLESS",
+        "SECURITY"
+      ],
+      "title": "Topic",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "change_id": {
+      "minLength": 1,
+      "title": "Change Id",
+      "type": "string"
+    },
+    "project_id": {
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "base_version": {
+      "minimum": 1,
+      "title": "Base Version",
+      "type": "integer"
+    },
+    "added_topics": {
+      "items": {
+        "$ref": "#/$defs/Topic"
+      },
+      "minItems": 1,
+      "title": "Added Topics",
+      "type": "array"
+    },
+    "added_milestones": {
+      "items": {
+        "$ref": "#/$defs/Milestone"
+      },
+      "minItems": 1,
+      "title": "Added Milestones",
+      "type": "array"
+    },
+    "rationale": {
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    }
+  },
+  "required": [
+    "change_id",
+    "project_id",
+    "base_version",
+    "added_topics",
+    "added_milestones",
+    "rationale"
+  ],
+  "title": "GoalChange",
+  "type": "object"
+}

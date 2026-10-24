@@ -8,13 +8,19 @@ import sqlite3
 from pathlib import Path
 from engine.schemas import AgentAction, GoalContract, StepResult
 from engine.validator import validate_action
+from engine.state import LifecycleStore
 
-class Store:
+class Store(LifecycleStore):
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, isolation_level=None)
         self.db.executescript('''
         PRAGMA foreign_keys=ON;
+        CREATE TABLE IF NOT EXISTS milestone_state(project TEXT, milestone TEXT, status TEXT,
+            PRIMARY KEY(project,milestone));
+        CREATE TABLE IF NOT EXISTS changes(id TEXT PRIMARY KEY, project TEXT, body TEXT, status TEXT, actor TEXT);
+        CREATE TABLE IF NOT EXISTS handoffs(id TEXT PRIMARY KEY, project TEXT, session TEXT, result TEXT);
+
         CREATE TABLE IF NOT EXISTS contracts(project TEXT, version INTEGER, body TEXT NOT NULL,
             PRIMARY KEY(project,version));
         CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, project TEXT NOT NULL);
@@ -46,9 +52,11 @@ class Store:
         return GoalContract.model_validate_json(row[0])
 
     def start_session(self, project, session_id):
-        self.current_contract(project)
         with self._transaction():
+            contract = self.effective_contract(project)
             self.db.execute("INSERT INTO sessions VALUES(?,?)", (session_id, project))
+            self.db.execute("INSERT INTO checkpoints VALUES(?,?)", (session_id, json.dumps({
+                "project_id": project, "session_id": session_id, "contract_version": contract.version, "state": "IDLE"})))
             self._event(project, "SESSION_STARTED", {"session_id": session_id})
 
     def sections(self, project):
@@ -68,7 +76,7 @@ class Store:
             session = self.db.execute("SELECT project FROM sessions WHERE id=?", (action.session_id,)).fetchone()
             if session is None or session[0] != action.project_id:
                 raise ValueError("Unknown session or project mismatch")
-            contract = self.current_contract(action.project_id)
+            contract = self.effective_contract(action.project_id)
             validation = validate_action(action, contract, action.session_id, references,
                                          set(self.sections(action.project_id)))
             committed = validation.decision == "ALLOW"
@@ -92,13 +100,14 @@ class Store:
         if not row:
             raise ValueError("No checkpoint")
         state = json.loads(row[0])
-        contract = self.current_contract(state["project_id"])
+        contract = self.effective_contract(state["project_id"])
         return {**state, "contract_version": contract.version,
-                "contract": contract.model_dump(mode="json"), "artifacts": self.sections(contract.project_id)}
+                "contract": contract.model_dump(mode="json"), "artifacts": self.sections(contract.project_id),
+                "handoffs": [h.model_dump(mode="json") for h in self.handoffs(session_id)]}
 
     def record_inference(self, project, session_id, action_id, calls):
         """Persist provider attribution without credentials or raw prompt/output."""
-        fields = ("provider", "model", "started_at", "attempt", "schema_valid",
+        fields = ("provider", "model", "agent", "started_at", "attempt", "schema_valid",
                   "elapsed_seconds", "error_kind", "http_status", "fallback_from", "fallback_reason")
         with self._transaction():
             self._event(project, "INFERENCE_COMPLETED", {

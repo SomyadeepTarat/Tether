@@ -6,13 +6,14 @@ import uuid
 from pathlib import Path
 from engine.executor import Store
 from engine.llm_client import create_inference_client
-from engine.orchestrator import run_step
+from engine.orchestrator import run_step, run_specialist_step
 from engine.schemas import GoalContract, Reference
 
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["single", "specialists"], default="single")
     parser.add_argument("--provider", choices=["groq", "groq-only", "ollama"])
     parser.add_argument("--db", default=os.getenv("TETHER_DB", "runtime/tether.sqlite3"))
     parser.add_argument("--session", default="S-001")
@@ -27,7 +28,8 @@ def main():
             store.create_goal_contract(contract)
         if not store.db.execute("SELECT 1 FROM sessions WHERE id=?", (args.session,)).fetchone():
             store.start_session(contract.project_id, args.session)
-        result = run_step(store, client, contract.project_id, args.session, references, args.action)
+        runner = run_specialist_step if args.mode == "specialists" else run_step
+        result = runner(store, client, contract.project_id, args.session, references, args.action)
         print(result.model_dump_json(indent=2))
     finally:
         Path("runtime").mkdir(exist_ok=True)

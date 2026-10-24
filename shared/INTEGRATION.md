@@ -57,3 +57,12 @@ unchanged. The reference Store additionally emits provider attribution through
 `record_inference(project, session_id, action_id, calls)`; mirror this when replacing
 the repository adapter. See [the complete teammate update](../docs/TEAMMATE_UPDATE.md)
 for failure routing, credentials, UI status and evaluation requirements.
+
+## Lifecycle update
+
+See [LIFECYCLE_UPDATE.md](../docs/LIFECYCLE_UPDATE.md) for additive goal-change,
+execution-progress and specialist services. New schemas: GoalChange,
+HandoffResult, WorkflowResult. Existing StepResult remains unchanged. The backend
+must authenticate approval/completion actors; the engine does not authenticate
+caller identity. Use effective_contract() for live milestone status and
+contracts()/current_contract() for immutable approved history.
