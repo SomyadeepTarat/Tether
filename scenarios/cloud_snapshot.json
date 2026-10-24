@@ -1,0 +1,15 @@
+{
+  "label": "SYNTHETIC_DEMONSTRATION",
+  "assumptions": "Illustrative monthly workload units; not current vendor prices. Lower deployment_steps means fewer illustrative setup steps.",
+  "records": [
+    {"id":"SNAPSHOT-AWS-COST","provider":"AWS","topic":"COST","monthly_units":35},
+    {"id":"SNAPSHOT-AZURE-COST","provider":"Azure","topic":"COST","monthly_units":40},
+    {"id":"SNAPSHOT-GCP-COST","provider":"Google Cloud","topic":"COST","monthly_units":32},
+    {"id":"SNAPSHOT-AWS-DEPLOYMENT","provider":"AWS","topic":"DEPLOYMENT","deployment_steps":5},
+    {"id":"SNAPSHOT-AZURE-DEPLOYMENT","provider":"Azure","topic":"DEPLOYMENT","deployment_steps":4},
+    {"id":"SNAPSHOT-GCP-DEPLOYMENT","provider":"Google Cloud","topic":"DEPLOYMENT","deployment_steps":3},
+    {"id":"SNAPSHOT-AWS-SERVERLESS","provider":"AWS","topic":"SERVERLESS","service":"Lambda"},
+    {"id":"SNAPSHOT-AZURE-SERVERLESS","provider":"Azure","topic":"SERVERLESS","service":"Functions"},
+    {"id":"SNAPSHOT-GCP-SERVERLESS","provider":"Google Cloud","topic":"SERVERLESS","service":"Cloud Run"}
+  ]
+}

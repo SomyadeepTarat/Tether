@@ -1,0 +1,12 @@
+export type Milestone = {id:string;title:string;allowed_topics:string[];status?:string};
+export type Contract = {project_id:string;version:number;objective:string;approved_topics:string[];constraints:{id:string;type:string;value:string|boolean;severity:string}[];milestones:Milestone[]};
+export type Proposal = {contract_version:number;milestone_id:string;topic:string;section_id:string;content:string;reference_ids_used:string[];rationale:string};
+export type Attempt = {provider?:string;model?:string;started_at?:string;attempt?:number;schema_valid?:boolean;elapsed_seconds?:number;error_kind?:string;http_status?:number;fallback_from?:string;fallback_reason?:string};
+export type Inference = {session_id:string;action_id:string;attempts:Attempt[]};
+export type EngineConfig = {provider:string;model:string;fallback_enabled:boolean;hosted_inputs:boolean;engine_available:boolean};
+export type Action = {id:string;session_id:string;body:Proposal;decision:'ALLOW'|'REVIEW'|'BLOCK';reason:string;created_at:string;inference?:Inference|null};
+export type Session = {id:string;status:string;created_at:string};
+export type Change = {id:string;topic:string;status:string;base_version:number};
+export type ProjectSummary = {id:string;name:string;created_at:string};
+export type Project = ProjectSummary & {contract:Contract;sessions:Session[];actions:Action[];artifacts:Proposal[];changes:Change[];inference:Inference[]};
+export type AuditEvent = {id:number;kind:string;message:string;created_at:string;body?:Inference|null};
