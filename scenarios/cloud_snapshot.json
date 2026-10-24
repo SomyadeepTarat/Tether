@@ -1,0 +1,84 @@
+{
+  "label": "SYNTHETIC_DEMONSTRATION",
+  "assumptions": "Invented comparable workload and prices for validation only. No current real-world pricing or measured deployment complexity.",
+  "references": [
+    {
+      "reference_id": "SNAPSHOT-AWS-COST",
+      "provider": "AWS",
+      "topic": "COST",
+      "summary": "AWS illustrative monthly cost is 30 USD for the same synthetic small-startup workload.",
+      "numerical_values": [
+        "30"
+      ],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-AWS-DEPLOYMENT",
+      "provider": "AWS",
+      "topic": "DEPLOYMENT",
+      "summary": "AWS deployment uses a guided service configuration in this illustrative scenario.",
+      "numerical_values": [],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-AWS-SERVERLESS",
+      "provider": "AWS",
+      "topic": "SERVERLESS",
+      "summary": "AWS serverless uses event-triggered functions in this illustrative scenario.",
+      "numerical_values": [],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-AZURE-COST",
+      "provider": "AZURE",
+      "topic": "COST",
+      "summary": "AZURE illustrative monthly cost is 35 USD for the same synthetic small-startup workload.",
+      "numerical_values": [
+        "35"
+      ],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-AZURE-DEPLOYMENT",
+      "provider": "AZURE",
+      "topic": "DEPLOYMENT",
+      "summary": "AZURE deployment uses an integrated application setup in this illustrative scenario.",
+      "numerical_values": [],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-AZURE-SERVERLESS",
+      "provider": "AZURE",
+      "topic": "SERVERLESS",
+      "summary": "AZURE serverless uses event-triggered functions in this illustrative scenario.",
+      "numerical_values": [],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-GCP-COST",
+      "provider": "GCP",
+      "topic": "COST",
+      "summary": "GCP illustrative monthly cost is 25 USD for the same synthetic small-startup workload.",
+      "numerical_values": [
+        "25"
+      ],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-GCP-DEPLOYMENT",
+      "provider": "GCP",
+      "topic": "DEPLOYMENT",
+      "summary": "GCP deployment uses a container-based service setup in this illustrative scenario.",
+      "numerical_values": [],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    },
+    {
+      "reference_id": "SNAPSHOT-GCP-SERVERLESS",
+      "provider": "GCP",
+      "topic": "SERVERLESS",
+      "summary": "GCP serverless uses event-triggered functions in this illustrative scenario.",
+      "numerical_values": [],
+      "label": "SYNTHETIC_DEMONSTRATION"
+    }
+  ]
+}

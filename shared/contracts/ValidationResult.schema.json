@@ -1,0 +1,27 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "enum": [
+        "ALLOW",
+        "REVIEW",
+        "BLOCK"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reasons",
+      "type": "array"
+    }
+  },
+  "required": [
+    "decision",
+    "reasons"
+  ],
+  "title": "ValidationResult",
+  "type": "object"
+}
