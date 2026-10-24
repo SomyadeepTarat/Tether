@@ -13,15 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
-from backend.inference import configuration, create_client
+from backend.inference import configuration, create_client, inference_failure_message
+from backend.config import load_backend_environment
 from backend.store import AppStore, now, prepare_database
 from engine.orchestrator import run_step, run_specialist_step
-from engine.config import load_environment
-
-load_environment()
 from engine.schemas import GoalChange, GoalContract, Milestone, Reference
 
 ROOT = Path(__file__).resolve().parents[1]
+load_backend_environment(ROOT)
 OPERATOR_TOKEN = secrets.token_urlsafe(32)
 ORIGINS = {'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:8000', 'http://127.0.0.1:8000', 'http://testserver'}
 
@@ -276,7 +275,7 @@ def step(session: str, body: StepRequest):
             with current._transaction():
                 current.db.execute("UPDATE app_sessions SET status='FAILED' WHERE id=?",(session,))
                 current._event(project,'FAILED',{'session_id':session,'action_id':action_id,'message':'Inference or engine execution failed; no unvalidated artifact was committed'})
-            raise HTTPException(503,'Engine execution failed. Check provider configuration and persisted inference attempts; retry resumes the same action key.') from exc
+            raise HTTPException(503,inference_failure_message(exc,client if 'client' in locals() else None)) from exc
 
 
 @app.post('/api/actions/{action}/decision')

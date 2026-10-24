@@ -25,7 +25,7 @@ def test_groq_success_and_secret_not_logged(monkeypatch):
     def respond(request,timeout,**kwargs):
         payload=json.loads(request.data)
         assert request.get_header('Authorization') == 'Bearer test-secret'
-        assert request.get_header('User-agent') == 'Tether/0.1'
+        assert request.get_header('User-agent') == 'Tether/0.2'
         import ssl
         assert kwargs['context'].verify_mode == ssl.CERT_REQUIRED
         assert kwargs['context'].check_hostname

@@ -341,3 +341,41 @@ def test_demo_reset_preserves_original_history(web):
     assert fresh['id']!=project and fresh['contract']['version']==1
     assert fresh['actions']==[] and fresh['artifacts']==[] and fresh['sessions']==[]
     assert web.get(f'/api/projects/{project}').json()['artifacts']==old['artifacts']
+
+def test_complete_merged_workflow_through_v2_and_all_milestones(web):
+    """Exercise the entire control flow with explicit test doubles, not model-quality claims."""
+    project,session=project_session(web)
+    with patch.object(api,'create_client',return_value=Model()):
+        assert web.post(f'/api/sessions/{session}/step',json={'action_id':'A-FULL-COST'}).json()['committed']
+    assert web.post(f'/api/projects/{project}/milestones/M1/complete').status_code==200
+    drift_session=web.post(f'/api/projects/{project}/sessions',json={}).json()['id']
+    with patch.object(api,'create_client',return_value=Model(topic='SECURITY')):
+        drift=web.post(f'/api/sessions/{drift_session}/step',json={}).json()
+    assert drift['validation']['decision']=='BLOCK' and not drift['committed']
+    change=web.post(f'/api/projects/{project}/changes',json={}).json()['id']
+    assert web.post(f'/api/changes/{change}/decision',json={'decision':'APPROVE'}).json()['version']==2
+    with TestClient(api.app,headers={'Origin':'http://testserver'}) as resumed:
+        resumed.get('/api/health')
+        with patch.object(api,'create_client',side_effect=AssertionError('Historical replay must not infer')):
+            assert resumed.post(f'/api/sessions/{session}/step',json={'action_id':'A-FULL-COST'}).json()['replayed']
+        for milestone,prose in [('M2',False),('M3',True),('M4',True),('M5',False)]:
+            next_session=resumed.post(f'/api/projects/{project}/sessions',json={}).json()['id']
+            with patch.object(api,'create_client',return_value=Model(prose=prose)):
+                step=resumed.post(f'/api/sessions/{next_session}/step',json={})
+            assert step.status_code==200,step.text
+            result=step.json()
+            assert result['action']['contract_version']==2
+            if prose:
+                assert result['validation']['decision']=='REVIEW' and not result['committed']
+                approved=resumed.post('/api/actions/'+result['action']['action_id']+'/decision',
+                    json={'decision':'APPROVE','reason':'Inspected the source quotations and accepted the synthesis.'})
+                assert approved.status_code==200,approved.text
+            else:
+                assert result['committed']
+            assert resumed.post(f'/api/projects/{project}/milestones/{milestone}/complete').status_code==200
+        final=resumed.get(f'/api/projects/{project}').json()
+        assert len(final['artifacts'])==5
+        assert all(m['status']=='COMPLETED' for m in final['contract']['milestones'])
+        versions=resumed.get(f'/api/projects/{project}/contracts').json()
+        assert len(versions)==2 and versions[-1]['milestones'][0]['status']=='ACTIVE'
+        assert resumed.post(f'/api/sessions/{next_session}/step',json={}).status_code==409
