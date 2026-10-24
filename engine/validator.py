@@ -66,6 +66,8 @@ def validate_action(action: AgentAction, contract: GoalContract, session_id: str
         blocked.append("Undeclared numerical content")
     if not all(rid in content for rid in effects.reference_ids_used):
         review.append("Content does not visibly cite declared sources")
+    if action.topic in {"COMPARISON", "RECOMMENDATION"}:
+        review.append("Comparison and recommendation require substantive human review")
     # Arbitrary paraphrases require human review in this first slice. Exact fixture
     # quotations give a small, auditable automatic path without an LLM self-grader.
     residual = content.replace("SYNTHETIC_DEMONSTRATION", "")

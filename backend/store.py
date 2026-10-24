@@ -50,6 +50,7 @@ class AppStore(Store):
             created_at TEXT, pending_action TEXT, mode TEXT NOT NULL DEFAULT 'single');
         CREATE TABLE IF NOT EXISTS app_resolutions(action_id TEXT PRIMARY KEY, disposition TEXT);
         CREATE TABLE IF NOT EXISTS app_requests(id TEXT PRIMARY KEY, session TEXT, mode TEXT);
+        CREATE TABLE IF NOT EXISTS app_workflows(session TEXT PRIMARY KEY, project TEXT, state TEXT, message TEXT);
         CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT);
         ''')
 

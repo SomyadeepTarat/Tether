@@ -21,3 +21,13 @@ main{max-width:1600px;padding:34px 35px 0;margin:0 auto}.page-heading{display:fl
 @media(max-width:760px){.sidebar{visibility:hidden}.nav-open .sidebar{visibility:visible}.nav-open{height:100dvh;overflow:hidden}.nav-open .main-shell{overflow:hidden}}
 
 .provider-setup{display:flex;align-items:flex-start;gap:8px;margin:13px 19px;padding:11px;background:#fcf8ed;border:1px solid #eee4ca;border-radius:6px;color:#ad945e}.provider-setup>svg{margin-top:2px}.provider-setup strong{font-size:9px;font-weight:500}.provider-setup p{font-size:8px;color:#a79a7e;margin-top:4px;line-height:1.6}.provider-setup.configured{background:#eff7f1;border-color:#dfebdf;color:#6e9478}.provider-setup.configured p{color:#85998a}
+
+/* Generated reports and review evidence remain readable at desktop/mobile sizes. */
+.report-markdown{font-size:13px;line-height:1.75;color:#555967;overflow-wrap:anywhere;overflow-x:auto;margin:14px 0}
+.report-content .report-markdown p,.detail-content .report-markdown p{font-size:13px;line-height:1.75;white-space:normal;margin:10px 0}
+.report-markdown table{border-collapse:collapse;width:100%;margin:16px 0;font-size:12px;text-align:left}
+.report-markdown th,.report-markdown td{padding:10px 12px;border:1px solid #e7e8ee;vertical-align:top;min-width:100px}
+.report-markdown th{background:#f6f8fa;font-weight:600;color:#444b59}
+.report-markdown ul,.report-markdown ol{padding-left:22px;margin:12px 0}
+.report-markdown h1,.report-markdown h2,.report-markdown h3{font-size:16px;margin:18px 0 10px;font-weight:600}
+.agent-panel>p[role=status]{margin:12px 19px;padding:12px;border-radius:6px;background:#f5f7fa;font-size:12px;line-height:1.6;color:#535b6a}

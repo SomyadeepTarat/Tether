@@ -27,10 +27,11 @@ class InferenceClient(Protocol):
 class InferenceError(ValueError):
     """Sanitized error; provider response bodies/credentials are never error text."""
 
-    def __init__(self, provider, kind, *, fallback_allowed=True):
+    def __init__(self, provider, kind, *, fallback_allowed=True, retry_after=None):
         self.provider = provider
         self.kind = kind
         self.fallback_allowed = fallback_allowed
+        self.retry_after = retry_after
         super().__init__(f"{provider}: {kind}")
 
 
@@ -93,9 +94,8 @@ class _StructuredClient:
                 record["schema_valid"] = True
                 return result
             except HTTPError as exc:
-                # No remote retry/backoff: go directly to local backup on outages,
-                # authentication issues or free-tier limits. Malformed requests fail
-                # visibly instead of hiding integration mistakes behind fallback.
+                # Only Groq may retry a bounded, server-specified rate-limit wait.
+                # Malformed requests and policy decisions never trigger retries.
                 record["http_status"] = exc.code
                 generation_failure = False
                 if self.provider == "groq" and exc.code == 400:
@@ -103,6 +103,12 @@ class _StructuredClient:
                         body = json.loads(exc.read(65536))
                         generation_failure = body.get("error", {}).get("code") == "json_validate_failed"
                     except (ValueError, AttributeError, TypeError):
+                        pass
+                retry_after = None
+                if self.provider == "groq" and exc.code == 429:
+                    try:
+                        retry_after = float(exc.headers.get('retry-after', ''))
+                    except (ValueError, TypeError, AttributeError):
                         pass
                 exc.close()
                 if generation_failure:
@@ -112,7 +118,7 @@ class _StructuredClient:
                     prompt += "\nInclude ALL schema properties, including agent and action_type. Do not omit defaulted fields."
                     continue
                 raise InferenceError(self.provider, f"http_{exc.code}",
-                                     fallback_allowed=exc.code in {401, 403, 408, 429, 498} or exc.code >= 500) from None
+                                     fallback_allowed=exc.code in {401, 403, 408, 429, 498} or exc.code >= 500, retry_after=retry_after) from None
             except (URLError, TimeoutError, OSError) as exc:
                 if isinstance(exc, ssl.SSLCertVerificationError) or isinstance(getattr(exc, 'reason', None), ssl.SSLCertVerificationError):
                     record["error_kind"] = "tls_verification_failed"
@@ -166,6 +172,21 @@ class GroqClient(_StructuredClient):
         self.endpoint = "https://api.groq.com/openai/v1/chat/completions"
         self.timeout = timeout
         self.calls = []
+
+    def generate(self, schema: type[T], system: str, prompt: str) -> T:
+        try:
+            return super().generate(schema, system, prompt)
+        except InferenceError as exc:
+            # One bounded retry honors Groq's Retry-After. Daily quotas or long
+            # waits fail/fall back visibly, rather than hanging the workflow.
+            delay = exc.retry_after
+            if exc.kind != 'http_429' or delay is None or not 0 <= delay <= 45:
+                raise
+            callback = getattr(self, 'on_retry', None)
+            if callback:
+                callback(delay)
+            time.sleep(delay)
+            return super().generate(schema, system, prompt)
 
     def _payload(self, schema, system, prompt):
         payload = {"model": self.model, "stream": False, "temperature": 0,

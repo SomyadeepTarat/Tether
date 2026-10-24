@@ -1,3 +1,5 @@
+> Updated workflow: the old Start session / Run next step instructions below are historical. Use New project → enter name/goal → Create & start workflow. Both specialists use the configured Groq provider. Source quotations progress automatically; comparison/recommendation pause for review, and approval continues execution. See [current verification](AUTOMATIC_WORKFLOW.md).
+
 # Hackathon review demo — 24 October 2026
 
 Open http://127.0.0.1:3000. Both frontend and backend are running. Keep the backend

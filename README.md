@@ -35,18 +35,20 @@ FastAPI loads backend/.env and then the ignored root .env file. Explicit shell/s
 
 Start Ollama and run `ollama pull qwen3:4b` for local inference. The hosted timeout is an HTTP I/O timeout, not a total deadline. Inference outages/eligible rate limits can fall back; policy BLOCK/REVIEW never switches providers. Malformed hosted requests and refusals fail visibly. Both providers use the same engine gateway.
 
-Hosted report requests send the objective, constraints, synthetic fixture and validation feedback to Groq. Specialist requests additionally contain research/handoff material; the UI selects local specialists explicitly. Durable state stays in SQLite. Inference events contain only allowlisted provider/model/agent/timing/fallback fields, never raw prompts or credentials. Historical actions retain their original attribution.
+Hosted report requests send the objective, constraints, synthetic fixture and validation feedback to Groq. Specialist requests additionally contain research/handoff material; the UI uses the configured provider for both sequential specialists. Durable state stays in SQLite. Inference events contain only allowlisted provider/model/agent/timing/fallback fields, never raw prompts or credentials. Historical actions retain their original attribution.
 
 ## Product workflow
 
-1. Create a cloud-comparison project and start a session.
-2. Run a controlled step; the real engine generates a typed AgentAction and validates it before commit.
-3. Exact supported quotations may ALLOW automatically. Arbitrary prose is REVIEW; hard violations BLOCK. REVIEW can be explicitly approved with an evidence-based explanation or rejected in the Drift inspector. Approval rechecks mandatory rules and the report revision; BLOCK cannot be overridden. Source summaries are visible alongside each citation.
-4. Confirm an active milestone complete only after inspecting its committed supporting artifact. This advances execution state without mutating approved contract snapshots.
-5. Propose and approve SERVERLESS to create immutable contract v2.
-6. Restart and restore checkpoints/current contract/artifacts. Reuse action_id on POST /api/sessions/{id}/step to replay without generation; interrupted specialist steps resume their validated handoff.
+1. Click **New project**, enter a name and cloud-comparison goal, and choose Research + Report (default) or a single agent. The supported scope is stated in the form; arbitrary project types are not implemented.
+2. **Create & start workflow** creates the project and starts a persisted backend sequence. Research → validated handoff → report → validation → commit → milestone progression runs without repeated next-step clicks. Closing the browser does not stop execution.
+3. Exact quotations can commit automatically. Milestones advance only when the committed artifact covers every required source. Comparison/recommendation always require substantive human REVIEW, even if the model returns quotations alone. Review sources and enter an explanation to approve; approval resumes the sequence automatically. BLOCK cannot be overridden. Rejection preserves history; resume requests a new proposal.
+4. **Pause after current step** allows an in-flight proposal to finish, then stops further work. **Resume workflow** resumes saved progress and failed action keys; it does not repeat completed commits. Incomplete evidence pauses explicitly and can be regenerated on resume.
+5. Scope expansion remains explicit: **Add serverless comparison → Approve change** creates immutable v2/M5. Start/resume a workflow to perform the newly approved work.
+6. Restarting FastAPI pauses an interrupted workflow; resume once to continue from persisted artifacts and handoffs. Existing manual step/session APIs remain available for diagnostics.
 
-New sessions default to single agent. The UI also offers explicit local specialists. The engine's specialist function itself supports configured providers for separately authorized use. Evaluation reads persisted proposal-level baseline/Tether runs; it stays empty until the evaluation CLI records actual calls. SYNTHETIC_DEMONSTRATION fixture values are invented, not current cloud prices or deployment measurements. Comparison and recommendation steps synthesize the supplied evidence and require human review.
+Both agents use `TETHER_PROVIDER`: Groq primary/Ollama backup by default, `groq-only` for hosted-only execution, or `ollama` for offline inference. Groq rate limits with a valid `Retry-After` of at most 45 seconds receive one automatic retry before eligible fallback; longer waits fail/fall back visibly. Provider waiting is shown in the workflow message and audit timeline. There is no unbounded retry loop or policy-triggered fallback. Run one API worker.
+
+Evaluation reads persisted proposal-level baseline/Tether runs; it stays empty until the evaluation CLI records actual calls. SYNTHETIC_DEMONSTRATION fixture values are invented, not current cloud prices or deployment measurements. The supplied deployment descriptions do not establish a simplicity ranking; recommendations must state this evidence limitation.
 
 ## Existing data
 
@@ -102,3 +104,5 @@ UNVERIFIED rather than assumed correct. Unauthorized rate is N/A when nothing
 commits. These are proposal simulations, not a completed four-session benchmark.
 
 See [pull verification and changes](docs/PULL_VERIFICATION.md) for current findings.
+
+See [automatic workflow verification](docs/AUTOMATIC_WORKFLOW.md) for the current UX and validation evidence.

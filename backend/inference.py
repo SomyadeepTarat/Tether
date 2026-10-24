@@ -42,7 +42,7 @@ def inference_failure_message(exc, client=None):
     provider = getattr(exc, 'provider', '')
     if provider == 'ollama':
         local = {
-            'connection_or_timeout': 'Local Ollama is unavailable or timed out. Start Ollama and install the configured model with ollama pull qwen3:4b. Specialist sessions require local Ollama.',
+            'connection_or_timeout': 'Local Ollama is unavailable or timed out. Start Ollama and install the configured model with ollama pull qwen3:4b.',
             'http_404': 'Ollama could not find the configured model. Run ollama pull qwen3:4b, or install the model named in OLLAMA_MODEL.',
             'structured_output_failed_twice': 'The local model returned invalid structured output twice. No proposal was committed.',
         }.get(kind, 'Local Ollama inference failed. Check the local server and configured model.')

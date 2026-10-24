@@ -67,7 +67,7 @@ export function MilestoneList({project,busy,running,onComplete}:{project:Project
       <span className="step-circle">{m.status==='COMPLETED'?<Check size={13}/>:String(i+1).padStart(2,'0')}</span>
       <div><h3>{m.title}</h3><span>{m.allowed_topics.join(' / ').toLowerCase()}</span></div>
       {m.status==='COMPLETED'?<CheckCheck size={16}/>:<Badge tone={m.status==='ACTIVE'?'blue':'muted'}>{m.status==='ACTIVE'?'In progress':'Pending'}</Badge>}
-      {m.status==='ACTIVE'&&project.artifacts.some(a=>a.milestone_id===m.id)&&<button className="text-button" disabled={busy||running} onClick={()=>onComplete(m.id)}>Confirm complete<Check size={12}/></button>}
+      {!project.workflow&&m.status==='ACTIVE'&&project.artifacts.some(a=>a.milestone_id===m.id)&&<button className="text-button" disabled={busy||running} onClick={()=>onComplete(m.id)}>Confirm complete<Check size={12}/></button>}
     </div>)}</div>
   </section>;
 }

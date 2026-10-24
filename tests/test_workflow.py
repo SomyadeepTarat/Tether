@@ -176,14 +176,14 @@ def test_concurrent_steps_generate_once(web):
     assert model.count==1
 
 
-def test_specialist_handoff_uses_local_client_and_audits_before_commit(web):
+def test_specialist_handoff_uses_configured_client_and_audits_before_commit(web):
     project,session=project_session(web,mode='specialists')
     model=Model()
     with patch.object(api,'create_client',return_value=model) as factory:
         result=web.post(f'/api/sessions/{session}/step',json={'action_id':'A-SPECIAL'})
     assert result.status_code==200,result.text
     assert result.json()['step']['committed']
-    factory.assert_called_once_with('ollama')
+    factory.assert_called_once_with()
     assert model.count==2
     h=web.get(f'/api/sessions/{session}/handoffs').json()['handoffs']
     assert h[0]['validation']['decision']=='ALLOW'
@@ -411,3 +411,135 @@ def test_provider_failure_is_persisted_and_retry_recovers(web,primary_kind,local
     state=web.get(f'/api/projects/{project}').json()
     assert state['sessions'][0]['failure_reason'] is None
     assert len(state['artifacts'])==1
+
+
+class CompleteModel(Model):
+    """All supplied evidence; synthesis deliberately requires human review."""
+    def generate(self, schema, system, prompt):
+        result = super().generate(schema, system, prompt)
+        data = json.loads(prompt)
+        refs = data['references']
+        if schema is AgentHandoff:
+            return result.model_copy(update={'findings': [
+                type(result.findings[0])(fact_id=f'F{i}',provider=r['provider'],reference_id=r['reference_id'],summary=r['summary'])
+                for i,r in enumerate(refs)]})
+        effects = type(result.declared_effects).model_validate({**result.declared_effects.model_dump(),
+            'reference_ids_used':[r['reference_id'] for r in refs],
+            'numerical_claims':[
+                {'value':n,'reference_id':r['reference_id'],'quote':r['summary']}
+                for r in refs for n in r['numerical_values']]})
+        content='SYNTHETIC_DEMONSTRATION\n'+'\n'.join(f"{r['summary']} [{r['reference_id']}]" for r in refs)
+        if data['topic'] in ('COMPARISON','RECOMMENDATION'):
+            content += '\nCompare these providers for a startup.'
+        return AgentAction.model_validate({**result.model_dump(), 'declared_effects':effects.model_dump(),
+            'arguments':{**result.arguments.model_dump(),'content':content}})
+
+
+def test_auto_workflow_progress_review_resume_and_complete(web):
+    model=CompleteModel()
+    with patch.object(api,'create_client',return_value=model) as factory:
+        created=web.post('/api/projects',json={'name':'Human project','objective':'Compare startup cloud costs and deployment.', 'auto_start':True,'mode':'specialists'})
+        assert created.status_code==201,created.text
+        project=created.json()['id']
+        state=web.get(f'/api/projects/{project}').json()
+        assert state['workflow']['state']=='AWAITING_REVIEW',state['workflow']
+        assert [m['status'] for m in state['contract']['milestones']]==['COMPLETED','COMPLETED','ACTIVE','PENDING']
+        assert len(state['artifacts'])==2
+        # Repeated resume cannot generate past an unresolved review.
+        count=model.count
+        assert web.post(f'/api/projects/{project}/workflow',json={}).status_code==202
+        assert model.count==count
+        for _ in range(2):
+            state=web.get(f'/api/projects/{project}').json()
+            action=next(a for a in state['actions'] if a['decision']=='REVIEW' and not a['resolution'])
+            approved=web.post(f"/api/actions/{action['id']}/decision",json={'decision':'APPROVE','reason':'Compared all supplied synthetic source quotations and supported claims.'})
+            assert approved.status_code==200,approved.text
+        state=web.get(f'/api/projects/{project}').json()
+        assert state['workflow']['state']=='COMPLETED',state['workflow']
+        assert len(state['artifacts'])==4
+        assert [a['milestone_id'] for a in state['artifacts']]==['M1','M2','M3','M4']
+        assert all(m['status']=='COMPLETED' for m in state['contract']['milestones'])
+        assert factory.call_args.args==()
+
+
+def test_automatic_workflow_stops_on_block_or_provider_failure(web):
+    for model,expected in [(Model(topic='SECURITY'),'BLOCKED'),(Model(fail=True),'FAILED')]:
+        project=web.post('/api/projects',json={}).json()['id']
+        with patch.object(api,'create_client',return_value=model):
+            result=web.post(f'/api/projects/{project}/workflow',json={'mode':'single'})
+        assert result.status_code==202
+        state=web.get(f'/api/projects/{project}').json()
+        assert state['workflow']['state']==expected,state['workflow']
+        assert not state['artifacts']
+        assert model.count==1
+
+
+def test_automatic_workflow_does_not_complete_partial_evidence(web):
+    project=web.post('/api/projects',json={}).json()['id']
+    with patch.object(api,'create_client',return_value=Model()):
+        web.post(f'/api/projects/{project}/workflow',json={'mode':'single'})
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['workflow']['state']=='NEEDS_EVIDENCE'
+    assert state['contract']['milestones'][0]['status']=='ACTIVE'
+    with patch.object(api,'create_client',return_value=CompleteModel()):
+        web.post(f'/api/projects/{project}/workflow',json={})
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['workflow']['state']=='AWAITING_REVIEW',state['workflow']
+    assert state['contract']['milestones'][0]['status']=='COMPLETED'
+
+
+def test_auto_workflow_pause_duplicate_claim_and_resume(web):
+    project=web.post('/api/projects',json={}).json()['id']
+    entered,release=threading.Event(),threading.Event()
+    model=CompleteModel(entered=entered,release=release)
+    with patch.object(api,'create_client',return_value=model),ThreadPoolExecutor() as pool:
+        task=pool.submit(web.post,f'/api/projects/{project}/workflow',json={'mode':'single'})
+        assert entered.wait(5)
+        assert web.post(f'/api/projects/{project}/workflow',json={}).status_code==409
+        assert web.post(f'/api/projects/{project}/sessions',json={}).status_code==409
+        assert web.post(f'/api/projects/{project}/workflow/pause',json={}).status_code==200
+        release.set()
+        assert task.result().status_code==202
+        state=web.get(f'/api/projects/{project}').json()
+        assert state['workflow']['state']=='PAUSED'
+        assert len(state['actions'])==1
+        assert state['contract']['milestones'][0]['status']=='ACTIVE'
+        web.post(f'/api/projects/{project}/workflow',json={})
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['workflow']['state']=='AWAITING_REVIEW'
+    assert state['contract']['milestones'][0]['status']=='COMPLETED'
+
+
+def test_restart_pauses_workflow_without_inference(web):
+    project=web.post('/api/projects',json={}).json()['id']
+    with patch.object(api,'drive_workflow'):
+        web.post(f'/api/projects/{project}/workflow',json={})
+    with TestClient(api.app, headers={'Origin':'http://testserver'}) as restarted:
+        state=restarted.get(f'/api/projects/{project}').json()
+        assert state['workflow']['state']=='PAUSED'
+        assert not state['actions']
+        assert 'restarted' in state['workflow']['message']
+
+
+def test_rejected_review_pauses_then_can_generate_again(web):
+    model=CompleteModel()
+    with patch.object(api,'create_client',return_value=model):
+        project=web.post('/api/projects',json={'auto_start':True,'mode':'single'}).json()['id']
+        state=web.get(f'/api/projects/{project}').json()
+        action=state['actions'][0]['id']
+        web.post(f'/api/actions/{action}/decision',json={'decision':'REJECT'})
+        state=web.get(f'/api/projects/{project}').json()
+        assert state['workflow']['state']=='PAUSED'
+        assert len(state['artifacts'])==2
+        web.post(f'/api/projects/{project}/workflow',json={'mode':'single'})
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['workflow']['state']=='AWAITING_REVIEW'
+    assert len(state['actions'])==4
+    assert state['actions'][0]['id']!=action
+
+
+def test_new_workflow_cannot_ignore_existing_review(web):
+    project,session=project_session(web)
+    with patch.object(api,'create_client',return_value=Model(prose=True)):
+        web.post(f'/api/sessions/{session}/step',json={})
+    assert web.post(f'/api/projects/{project}/workflow',json={}).status_code==409

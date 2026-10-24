@@ -8,7 +8,7 @@ import os
 import secrets
 import sqlite3
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
@@ -17,6 +17,7 @@ from backend.inference import configuration, create_client, inference_failure_me
 from backend.config import load_backend_environment
 from backend.store import AppStore, now, prepare_database
 from engine.orchestrator import run_step, run_specialist_step
+from engine.validator import source_authorized
 from engine.schemas import GoalChange, GoalContract, Milestone, Reference
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,7 @@ async def lifespan(app):
         current.import_legacy()
         with current._transaction():
             current.db.execute("UPDATE app_sessions SET status='FAILED' WHERE status IN ('PLANNING','VALIDATING','HANDOFF')")
+            current.db.execute("UPDATE app_workflows SET state='PAUSED',message='Backend restarted. Resume to continue from saved evidence.' WHERE state='RUNNING'")
     yield
 
 
@@ -70,6 +72,8 @@ class Input(BaseModel):
 
 class CreateProject(Input):
     name: str = Field(default='Startup cloud comparison', min_length=1, max_length=120)
+    auto_start: bool = False
+    mode: Literal['single', 'specialists'] = 'specialists'
     objective: str = Field(default='Compare AWS, Azure, and Google Cloud for a startup. Prioritize cost and deployment simplicity.', min_length=10, max_length=2000)
 
 
@@ -124,7 +128,8 @@ def conflict(exc):
 
 
 def active_work(current, project):
-    return current.db.execute("SELECT 1 FROM app_sessions WHERE project=? AND status IN ('PLANNING','VALIDATING','HANDOFF')", (project,)).fetchone()
+    return (current.db.execute("SELECT 1 FROM app_sessions WHERE project=? AND status IN ('PLANNING','VALIDATING','HANDOFF')", (project,)).fetchone()
+            or current.db.execute("SELECT 1 FROM app_workflows WHERE project=? AND state='RUNNING'", (project,)).fetchone())
 
 
 def proposal_view(action):
@@ -146,7 +151,14 @@ def projects():
 
 
 @app.post('/api/projects', status_code=201)
-def create_project(body: CreateProject):
+def create_project(body: CreateProject, background_tasks: BackgroundTasks):
+    created = create_project_record(body)
+    if body.auto_start:
+        start_workflow(created['id'], StartSession(mode=body.mode), background_tasks)
+    return created
+
+
+def create_project_record(body: CreateProject):
     project = uid('P')
     template = json.loads((ROOT / 'scenarios/cloud_comparison.json').read_text(encoding='utf-8'))
     goal = GoalContract.model_validate({**template, 'project_id':project, 'objective':body.objective})
@@ -189,6 +201,8 @@ def project_view(current, project):
     for (key,) in current.db.execute('SELECT action_id FROM artifacts WHERE project=? ORDER BY section', (project,)):
         result = current.action_result(key)
         artifacts.append(proposal_view(result.action))
+    milestone_order = {m.id: i for i, m in enumerate(goal.milestones)}
+    artifacts.sort(key=lambda artifact: milestone_order.get(artifact['milestone_id'], len(milestone_order)))
     sessions = [dict(zip(('id','project_id','status','created_at','pending_action','mode'), row)) for row in current.db.execute('SELECT id,project,status,created_at,pending_action,mode FROM app_sessions WHERE project=? ORDER BY created_at DESC', (project,))]
     failures = {e['body'].get('session_id'): e['body'].get('message')
                 for e in timeline if e['kind'] == 'FAILED'}
@@ -201,7 +215,7 @@ def project_view(current, project):
         changes.append({'id':key,'topic':', '.join(change['added_topics']),'status':saved['status'], 'base_version':change['base_version']})
     return {'id':project, 'name':meta[0] if meta else project, 'created_at':meta[1] if meta else '',
             'contract':goal.model_dump(mode='json'), 'sessions':sessions,'actions':actions,'artifacts':artifacts,
-            'changes':changes,'inference':list(inference.values()), 'legacy_archive_available':bool(current.archive(project)['contracts'])}
+            'changes':changes,'inference':list(inference.values()), 'workflow':workflow_view(current, project), 'legacy_archive_available':bool(current.archive(project)['contracts'])}
 
 
 @app.get('/api/projects/{project}')
@@ -241,6 +255,14 @@ def get_session(session: str):
 @app.post('/api/sessions/{session}/step')
 def step(session: str, body: StepRequest):
     with store() as current:
+        info = require_session(current, session)
+        if current.db.execute("SELECT 1 FROM app_workflows WHERE project=? AND state='RUNNING'", (info['project_id'],)).fetchone():
+            raise HTTPException(409, 'Automatic workflow is running')
+    return execute_step(session, body)
+
+
+def execute_step(session: str, body: StepRequest):
+    with store() as current:
         # Serialize project execution before opening any model request. No write
         # transaction remains open during network I/O. Run one API worker locally.
         with current._transaction():
@@ -255,7 +277,7 @@ def step(session: str, body: StepRequest):
                 if prior.action.session_id != session or prior.action.project_id != project:
                     raise HTTPException(409,'Action key belongs to another session')
                 return {**prior.model_dump(mode='json'),'replayed':True}
-            if active_work(current,project):
+            if current.db.execute("SELECT 1 FROM app_sessions WHERE project=? AND status IN ('PLANNING','VALIDATING','HANDOFF')", (project,)).fetchone():
                 raise HTTPException(409,'A step is already running')
             claim = current.db.execute('SELECT session,mode FROM app_requests WHERE id=?',(action_id,)).fetchone()
             if claim and claim != (session,info['mode']):
@@ -266,8 +288,9 @@ def step(session: str, body: StepRequest):
             current.db.execute("UPDATE app_sessions SET status='PLANNING',pending_action=? WHERE id=?",(action_id,session))
             current._event(project,'PLANNING',{'session_id':session,'action_id':action_id,'mode':info['mode']})
         try:
-            # Hosted research/handoff export has not been authorized for this UI.
-            client = create_client('ollama' if info['mode'] == 'specialists' else None)
+            client = create_client()
+            primary = getattr(client, 'primary', client)
+            primary.on_retry = lambda delay: report_provider_wait(session, delay)
             runner = run_specialist_step if info['mode'] == 'specialists' else run_step
             result = runner(current,client,project,session,references(),action_id)
             final = result.step if info['mode'] == 'specialists' else result
@@ -284,7 +307,7 @@ def step(session: str, body: StepRequest):
 
 
 @app.post('/api/actions/{action}/decision')
-def decide_action(action: str, body: ReviewDecision):
+def decide_action(action: str, body: ReviewDecision, background_tasks: BackgroundTasks):
     with store() as current, current._transaction():
         result = current.action_result(action)
         if not result:
@@ -304,6 +327,12 @@ def decide_action(action: str, body: ReviewDecision):
             with current._transaction():
                 current.db.execute('UPDATE app_sessions SET status=? WHERE id=?',
                                    (checkpoint['state'],result.action.session_id))
+        workflow = current.db.execute("SELECT state FROM app_workflows WHERE session=?", (result.action.session_id,)).fetchone()
+        if body.decision == 'REJECT' and workflow and workflow[0] == 'AWAITING_REVIEW':
+            set_workflow_state(current, result.action.session_id, 'PAUSED', 'Proposal rejected. Resume to generate a new proposal.')
+        if body.decision == 'APPROVE' and workflow and workflow[0] == 'AWAITING_REVIEW':
+            current.db.execute("UPDATE app_workflows SET state='RUNNING',message='Review approved. Continuing automatically.' WHERE session=?", (result.action.session_id,))
+            background_tasks.add_task(drive_workflow, result.action.session_id)
         return {'status':resolution['decision']}
 
 
@@ -402,6 +431,7 @@ def reject_pending_handoff(session: str, body: Decision):
         checkpoint.pop('pending_action_id',None)
         checkpoint['state']='IDLE'
         current.db.execute('UPDATE checkpoints SET body=? WHERE session=?',(json.dumps(checkpoint),session))
+        current.db.execute("UPDATE app_workflows SET state='PAUSED',message='Research rejected. Resume to generate new research.' WHERE session=? AND state IN ('AWAITING_REVIEW','BLOCKED')", (session,))
         current._event(info['project_id'],'HANDOFF_REJECTED',{'action_id':key,'actor':'local-operator'})
         return {'status':'REJECTED'}
 
@@ -427,7 +457,7 @@ def reset_demo(body: ResetDemo):
             raise HTTPException(409,'Finish the running step first')
         meta = current.db.execute('SELECT name FROM app_projects WHERE id=?',(body.project_id,)).fetchone()
         name = meta[0] if meta else 'Cloud comparison'
-    created = create_project(CreateProject(name=name[:100] + ' / fresh demo',objective=goal.objective))
+    created = create_project_record(CreateProject(name=name[:100] + ' / fresh demo',objective=goal.objective))
     return {**created,'previous_project_id':body.project_id,'history_preserved':True}
 
 
@@ -436,3 +466,117 @@ def archive(project: str):
     with store() as current:
         require_project(current,project)
         return current.archive(project)
+
+
+# A persisted claim owns the sequence; the browser only observes it. One local
+# API worker is required, as with existing inference claims. Restart pauses safely.
+def workflow_view(current, project):
+    row = current.db.execute('SELECT session,state,message FROM app_workflows WHERE project=? ORDER BY rowid DESC LIMIT 1', (project,)).fetchone()
+    return dict(zip(('session_id', 'state', 'message'), row)) if row else None
+
+
+def workflow_state(session, state, message):
+    with store() as current, current._transaction():
+        set_workflow_state(current, session, state, message)
+
+
+def set_workflow_state(current, session, state, message):
+    current.db.execute('UPDATE app_workflows SET state=?,message=? WHERE session=?', (state, message, session))
+    info = require_session(current, session)
+    current._event(info['project_id'], 'WORKFLOW_' + state, {'session_id': session, 'message': message})
+
+
+def drive_workflow(session, regenerate=False):
+    try:
+        if regenerate:
+            execute_step(session, StepRequest())
+        while True:
+            with store() as current, current._transaction():
+                row = current.db.execute('SELECT state FROM app_workflows WHERE session=?', (session,)).fetchone()
+                if not row or row[0] != 'RUNNING':
+                    return
+                info = require_session(current, session)
+                project = info['project_id']
+                goal = current.effective_contract(project)
+                active = next((m for m in goal.milestones if m.status == 'ACTIVE'), None)
+                if not active:
+                    set_workflow_state(current, session, 'COMPLETED', 'All approved milestones are complete.')
+                    return
+                # Only the active milestone's committed artifact can advance it.
+                artifact = next((current.action_result(key) for (key,) in current.db.execute('SELECT action_id FROM artifacts WHERE project=?', (project,))
+                                 if current.action_result(key).action.milestone_id == active.id), None)
+                if artifact and artifact.committed:
+                    # Exact quotation milestones must cover every supplied source;
+                    # synthesis requires the existing explicit human REVIEW approval.
+                    required = {r.reference_id for r in references() if source_authorized(r, active.allowed_topics[0], goal)}
+                    used = set(artifact.action.declared_effects.reference_ids_used)
+                    if not required.issubset(used):
+                        set_workflow_state(current, session, 'NEEDS_EVIDENCE', 'Saved evidence is incomplete. Resume to regenerate this milestone with all required sources.')
+                        return
+                    current.complete_milestone(project, active.id, actor='application-workflow')
+                    continue
+                # A restart/resume must not generate over an unresolved proposal.
+                for (key,) in current.db.execute("SELECT id FROM actions WHERE json_extract(body,'$.session_id')=? ORDER BY rowid DESC", (session,)):
+                    result = current.action_result(key)
+                    if result.action.milestone_id == active.id and result.validation.decision == 'REVIEW' and not current.action_review(key):
+                        set_workflow_state(current, session, 'AWAITING_REVIEW', 'Review the proposed content and its evidence to continue.')
+                        return
+            result = execute_step(session, StepRequest())
+            with store() as current:
+                info = require_session(current, session)
+                state = info['status']
+            with store() as current:
+                if current.db.execute('SELECT state FROM app_workflows WHERE session=?', (session,)).fetchone()[0] != 'RUNNING':
+                    return
+            if state != 'COMPLETED':
+                workflow_state(session, state, 'Review the proposed content and evidence.' if state == 'AWAITING_REVIEW' else 'Execution stopped. Inspect the validation result before retrying.')
+                return
+    except HTTPException as exc:
+        workflow_state(session, 'FAILED', str(exc.detail))
+    except Exception:
+        workflow_state(session, 'FAILED', 'Workflow interrupted. Inspect saved state and resume; no automatic retry was attempted.')
+
+
+@app.post('/api/projects/{project}/workflow', status_code=202)
+def start_workflow(project: str, body: StartSession, background_tasks: BackgroundTasks):
+    with store() as current, current._transaction():
+        require_project(current, project)
+        if active_work(current, project):
+            raise HTTPException(409, 'A workflow or step is already running')
+        previous = workflow_view(current, project)
+        if not previous:
+            for (key,) in current.db.execute('SELECT id FROM actions WHERE project=?', (project,)):
+                result = current.action_result(key)
+                if result.validation.decision == 'REVIEW' and not result.committed and not current.action_review(key):
+                    raise HTTPException(409, 'Resolve existing report reviews before starting a workflow')
+        if previous and previous['state'] != 'COMPLETED':
+            session = previous['session_id']
+        else:
+            session = uid('S')
+            current.db.execute('INSERT INTO sessions VALUES(?,?)', (session, project))
+            current.db.execute('INSERT INTO checkpoints VALUES(?,?)', (session, json.dumps({'project_id':project, 'session_id':session, 'contract_version':current.current_contract(project).version, 'state':'IDLE'})))
+            current.db.execute('INSERT INTO app_sessions VALUES(?,?,?,?,?,?)', (session, project, 'IDLE', now(), None, body.mode))
+            current._event(project, 'SESSION_STARTED', {'session_id':session, 'mode':body.mode})
+        current.db.execute("INSERT INTO app_workflows VALUES(?,?,'RUNNING','Working through approved milestones.') ON CONFLICT(session) DO UPDATE SET state='RUNNING',message=excluded.message", (session, project))
+    background_tasks.add_task(drive_workflow, session, bool(previous and previous['state'] == 'NEEDS_EVIDENCE'))
+    return {'session_id': session, 'state': 'RUNNING'}
+
+
+@app.post('/api/projects/{project}/workflow/pause')
+def pause_workflow(project: str):
+    with store() as current, current._transaction():
+        require_project(current, project)
+        workflow = workflow_view(current, project)
+        if not workflow or workflow['state'] != 'RUNNING':
+            raise HTTPException(409, 'No running workflow')
+        current.db.execute("UPDATE app_workflows SET state='PAUSED',message='Paused by you. An in-flight step may finish; no new step will start.' WHERE session=?", (workflow['session_id'],))
+    return {'state': 'PAUSED'}
+
+
+
+def report_provider_wait(session, delay):
+    with store() as current, current._transaction():
+        info = require_session(current, session)
+        message = f'Groq rate limit: waiting {delay:g} seconds before one automatic retry.'
+        current.db.execute("UPDATE app_workflows SET message=? WHERE session=? AND state='RUNNING'", (message, session))
+        current._event(info['project_id'], 'PROVIDER_WAIT', {'session_id':session, 'message':message})

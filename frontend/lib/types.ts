@@ -9,7 +9,7 @@ export type Session = {id:string;status:string;created_at:string;mode:'single'|'
 export type Handoff = {handoff:{handoff_id:string;source_agent:string;target_agent:string;milestone_id:string;topic:string;findings:{fact_id:string;provider:string;reference_id:string;summary:string}[]};validation:{decision:string;reasons:string[]};replayed:boolean;resolution?:string|null};
 export type Change = {id:string;topic:string;status:string;base_version:number};
 export type ProjectSummary = {id:string;name:string;created_at:string};
-export type Project = ProjectSummary & {contract:Contract;sessions:Session[];actions:Action[];artifacts:Proposal[];changes:Change[];inference:Inference[];legacy_archive_available:boolean};
+export type Project = ProjectSummary & {workflow?:{session_id:string;state:string;message:string}|null;contract:Contract;sessions:Session[];actions:Action[];artifacts:Proposal[];changes:Change[];inference:Inference[];legacy_archive_available:boolean};
 export type AuditEvent = {id:number;kind:string;message:string;created_at:string;body?:Inference|null};
 export type EvaluationRun = {id:string;grader_version?:number;mode:'baseline'|'tether';case?:string;status:string;actual_models:string[];elapsed_seconds:number;error?:string;metrics?:{committed_actions:number;unauthorized_committed_actions:number;constraint_violations:number;source_fidelity:string;unauthorized_action_rate:number|null}};
 

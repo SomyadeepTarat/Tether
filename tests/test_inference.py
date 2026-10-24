@@ -213,3 +213,48 @@ def test_tls_failure_is_distinct_and_sanitized(monkeypatch,wrapped):
         c.generate(ValidationResult,'s','p')
     assert 'private certificate' not in str(caught.value)
     assert c.calls[0]['error_kind']=='tls_verification_failed'
+
+
+def test_groq_honors_short_retry_after_once():
+    from unittest.mock import patch
+    from engine.llm_client import GroqClient, _StructuredClient, InferenceError
+    client=GroqClient(api_key='test-only')
+    notice=[]
+    client.on_retry=notice.append
+    expected=object()
+    with patch.object(_StructuredClient,'generate',side_effect=[InferenceError('groq','http_429',retry_after=2),expected]) as generate,patch('engine.llm_client.time.sleep') as sleep:
+        assert client.generate(object,'system','prompt') is expected
+        assert generate.call_count==2
+        sleep.assert_called_once_with(2)
+        assert notice==[2]
+
+
+def test_groq_does_not_loop_or_wait_for_long_quota():
+    from unittest.mock import patch
+    from engine.llm_client import GroqClient, _StructuredClient, InferenceError
+    import pytest
+    client=GroqClient(api_key='test-only')
+    for delay in (None,46,-1,float('nan')):
+        with patch.object(_StructuredClient,'generate',side_effect=InferenceError('groq','http_429',retry_after=delay)) as generate,patch('engine.llm_client.time.sleep') as sleep:
+            with pytest.raises(InferenceError): client.generate(object,'system','prompt')
+            assert generate.call_count==1
+            sleep.assert_not_called()
+    with patch.object(_StructuredClient,'generate',side_effect=InferenceError('groq','http_429',retry_after=0)) as generate,patch('engine.llm_client.time.sleep'):
+        with pytest.raises(InferenceError): client.generate(object,'system','prompt')
+        assert generate.call_count==2
+
+
+def test_retry_after_transport_recovers_before_local_fallback(monkeypatch):
+    responses=iter([HTTPError('https://api.groq.com',429,'private body',{'retry-after':'2'},io.BytesIO()),groq_response()])
+    def respond(*a,**k):
+        response=next(responses)
+        if isinstance(response,Exception): raise response
+        return response
+    waits=[]
+    monkeypatch.setattr(adapter,'urlopen',respond)
+    monkeypatch.setattr(adapter.time,'sleep',waits.append)
+    c=client()
+    assert c.generate(ValidationResult,'s','p').decision=='ALLOW'
+    assert waits==[2]
+    assert not c.backup.calls
+    assert len(c.calls)==2 and c.calls[0]['error_kind']=='http_429'
