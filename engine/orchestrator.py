@@ -1,6 +1,14 @@
 """Single-agent first slice. A step key survives retries and process restarts."""
 from engine.report_agent import plan_next_action
 
+def revision_feedback(store, session_id):
+    row = store.db.execute("SELECT a.body,r.reason FROM action_reviews r JOIN actions a ON a.id=r.action_id WHERE json_extract(a.body,'$.session_id')=? AND r.decision='REJECTED' AND length(trim(r.reason))>0 ORDER BY a.rowid DESC LIMIT 1", (session_id,)).fetchone()
+    if not row:
+        return None
+    import json
+    return {'requested_changes':row[1], 'previous_draft':json.loads(row[0])['arguments']['content'][:2400]}
+
+
 def run_step(store, client, project_id, session_id, references, action_id):
     session = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
     if not session or session[0] != project_id:
@@ -17,8 +25,13 @@ def run_step(store, client, project_id, session_id, references, action_id):
                      and e["body"]["action"]["session_id"] == session_id), None)
     call_start = len(getattr(client, "calls", []))
     try:
-        action = plan_next_action(client, contract, session_id, references, action_id,
-                                  store.sections(project_id), previous)
+        feedback = revision_feedback(store, session_id)
+        if contract.approved_topics == ["DRAFT"]:
+            from engine.draft_agent import plan_draft
+            action = plan_draft(client, contract, session_id, action_id, store.sections(project_id), feedback)
+        else:
+            action = plan_next_action(client, contract, session_id, references, action_id,
+                                      store.sections(project_id), previous, task_note=__import__('json').dumps(feedback) if feedback else "")
     finally:
         calls = getattr(client, "calls", [])[call_start:]
         for call in calls:
@@ -75,7 +88,7 @@ def run_specialist_step(store, client, project_id, session_id, references, actio
         evidence = [r for r in references if r.reference_id in source_ids]
         phase = "REPORT"
         action = plan_next_action(client, contract, session_id, evidence, action_id,
-                                  store.sections(project_id), handoff=handoff)
+                                  store.sections(project_id), handoff=handoff, task_note=__import__('json').dumps(revision_feedback(store, session_id)))
         flush_inference()
         if (action.action_id, action.project_id, action.session_id, action.milestone_id, action.topic) != (
                 action_id, project_id, session_id, handoff.milestone_id, handoff.topic):

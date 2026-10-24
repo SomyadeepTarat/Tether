@@ -7,6 +7,7 @@ class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 class Topic(StrEnum):
+    DRAFT = "DRAFT"
     COST = "COST"
     DEPLOYMENT = "DEPLOYMENT"
     COMPARISON = "COMPARISON"
@@ -60,7 +61,7 @@ class DeclaredEffects(Model):
     sections_created: list[str] = Field(default_factory=list)
     sections_modified: list[str] = Field(default_factory=list)
     topics_introduced: list[Topic]
-    reference_ids_used: list[str] = Field(min_length=1)
+    reference_ids_used: list[str] = Field(default_factory=list)
     numerical_claims: list[NumericalClaim] = Field(default_factory=list)
 
 class Section(Model):

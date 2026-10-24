@@ -3,6 +3,7 @@ import json
 import os
 import time
 import ssl
+import threading
 import certifi
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -165,6 +166,8 @@ class OllamaClient(_StructuredClient):
 
 class GroqClient(_StructuredClient):
     provider = "groq"
+    _request_lock = threading.RLock()
+    _cooldowns = {}
 
     def __init__(self, api_key=None, model=None, timeout=15):
         self.api_key = api_key if api_key is not None else os.getenv("GROQ_API_KEY", "")
@@ -174,6 +177,23 @@ class GroqClient(_StructuredClient):
         self.calls = []
 
     def generate(self, schema: type[T], system: str, prompt: str) -> T:
+        # Shared across clients/projects in the single API worker. A provider
+        # cooldown must survive the short-lived client created for each step.
+        with self._request_lock:
+            key = (self.api_key, self.model)
+            remaining = self._cooldowns.get(key, 0) - time.monotonic()
+            if remaining > 0:
+                self.calls.append({"provider":self.provider, "model":self.model,
+                    "schema_valid":False, "error_kind":"http_429", "elapsed_seconds":0})
+                raise InferenceError(self.provider, 'http_429', retry_after=remaining)
+            try:
+                return self._generate_with_retry(schema, system, prompt)
+            except InferenceError as exc:
+                if exc.kind == 'http_429':
+                    self._cooldowns[key] = time.monotonic() + max(1, exc.retry_after if exc.retry_after is not None else 60)
+                raise
+
+    def _generate_with_retry(self, schema: type[T], system: str, prompt: str) -> T:
         try:
             return super().generate(schema, system, prompt)
         except InferenceError as exc:

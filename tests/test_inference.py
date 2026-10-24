@@ -235,10 +235,12 @@ def test_groq_does_not_loop_or_wait_for_long_quota():
     import pytest
     client=GroqClient(api_key='test-only')
     for delay in (None,46,-1,float('nan')):
+        GroqClient._cooldowns.clear()
         with patch.object(_StructuredClient,'generate',side_effect=InferenceError('groq','http_429',retry_after=delay)) as generate,patch('engine.llm_client.time.sleep') as sleep:
             with pytest.raises(InferenceError): client.generate(object,'system','prompt')
             assert generate.call_count==1
             sleep.assert_not_called()
+    GroqClient._cooldowns.clear()
     with patch.object(_StructuredClient,'generate',side_effect=InferenceError('groq','http_429',retry_after=0)) as generate,patch('engine.llm_client.time.sleep'):
         with pytest.raises(InferenceError): client.generate(object,'system','prompt')
         assert generate.call_count==2
@@ -258,3 +260,22 @@ def test_retry_after_transport_recovers_before_local_fallback(monkeypatch):
     assert waits==[2]
     assert not c.backup.calls
     assert len(c.calls)==2 and c.calls[0]['error_kind']=='http_429'
+
+@pytest.fixture(autouse=True)
+def isolated_provider_cooldown():
+    GroqClient._cooldowns.clear()
+    yield
+    GroqClient._cooldowns.clear()
+
+
+def test_rate_limit_cooldown_shared_between_new_clients(monkeypatch):
+    requests = []
+    def limited(request, timeout, **kwargs):
+        requests.append(request.full_url)
+        raise HTTPError(request.full_url, 429, 'limited', {}, io.BytesIO())
+    monkeypatch.setattr(adapter, 'urlopen', limited)
+    for _ in range(2):
+        with pytest.raises(InferenceError) as error:
+            GroqClient(api_key='test-secret').generate(ValidationResult, 's', 'p')
+        assert error.value.kind == 'http_429'
+    assert len(requests) == 1

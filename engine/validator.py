@@ -40,6 +40,16 @@ def validate_action(action: AgentAction, contract: GoalContract, session_id: str
             blocked.append(f"Unknown source: {rid}")
         elif not source_authorized(refs[rid], action.topic, contract):
             blocked.append(f"Source topic mismatch: {rid}")
+    if action.topic == "DRAFT":
+        if effects.reference_ids_used or effects.numerical_claims:
+            blocked.append("General drafts cannot claim verified source evidence")
+        if "UNVERIFIED_DRAFT" not in action.arguments.content:
+            blocked.append("General response must be labeled UNVERIFIED_DRAFT")
+        return ValidationResult(decision="BLOCK" if blocked else "REVIEW", reasons=blocked + [
+            "General draft: no live search or independent factual verification was performed",
+            "Check that the response answers your request and that its claims and assumptions are acceptable before saving"])
+    if not effects.reference_ids_used:
+        blocked.append("Evidence-based actions must declare source references")
     if action.topic == "COST" and not effects.numerical_claims:
         blocked.append("Cost section must include supported numerical evidence")
     content = action.arguments.content

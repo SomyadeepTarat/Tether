@@ -543,3 +543,39 @@ def test_new_workflow_cannot_ignore_existing_review(web):
     with patch.object(api,'create_client',return_value=Model(prose=True)):
         web.post(f'/api/sessions/{session}/step',json={})
     assert web.post(f'/api/projects/{project}/workflow',json={}).status_code==409
+
+
+class DraftModel:
+    def __init__(self):
+        self.calls = []
+        self.prompts = []
+
+    def generate(self, schema, system, prompt):
+        self.prompts.append(json.loads(prompt))
+        return schema(content='UNVERIFIED_DRAFT A launch plan tailored to your request.',
+                      rationale='Addresses the requested launch plan; assumptions need review.')
+
+
+def test_general_request_review_feedback_and_completion(web):
+    model = DraftModel()
+    with patch.object(api, 'create_client', return_value=model):
+        response = web.post('/api/projects', json={'name':'Launch', 'kind':'draft',
+            'objective':'Write a concise launch plan for a gardening app.', 'auto_start':True})
+        assert response.status_code == 201, response.text
+        project = response.json()['id']
+        view = web.get(f'/api/projects/{project}').json()
+        assert view['workflow']['state'] == 'AWAITING_REVIEW'
+        assert view['sessions'][0]['mode'] == 'single'
+        action = view['actions'][0]
+        assert action['decision'] == 'REVIEW'
+        assert not view['artifacts']
+        response = web.post(f"/api/actions/{action['id']}/revise", json={'feedback':'Focus the plan on community gardens.'})
+        assert response.status_code == 202, response.text
+        assert model.prompts[-1]['revision_feedback']['requested_changes'] == 'Focus the plan on community gardens.'
+        view = web.get(f'/api/projects/{project}').json()
+        pending = next(a for a in view['actions'] if not a['resolution'])
+        response = web.post(f"/api/actions/{pending['id']}/decision", json={'decision':'APPROVE','reason':'I checked the plan and accept these assumptions.'})
+        assert response.status_code == 200, response.text
+        view = web.get(f'/api/projects/{project}').json()
+        assert view['workflow']['state'] == 'COMPLETED'
+        assert len(view['artifacts']) == 1

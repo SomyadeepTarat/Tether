@@ -31,3 +31,5 @@ main{max-width:1600px;padding:34px 35px 0;margin:0 auto}.page-heading{display:fl
 .report-markdown ul,.report-markdown ol{padding-left:22px;margin:12px 0}
 .report-markdown h1,.report-markdown h2,.report-markdown h3{font-size:16px;margin:18px 0 10px;font-weight:600}
 .agent-panel>p[role=status]{margin:12px 19px;padding:12px;border-radius:6px;background:#f5f7fa;font-size:12px;line-height:1.6;color:#535b6a}
+
+.notice,.live-status{display:flex;align-items:center;gap:12px;padding:16px 20px;border:1px solid #c7dfd5;background:#f1faf6;border-radius:12px;margin-bottom:20px;color:#245743}.notice span,.live-status div{flex:1}.notice button{border:0;background:none;cursor:pointer}.live-status p{margin:5px 0 0;font-size:13px;color:#556571}.live-status.is-running{background:#f1f5ff;border-color:#c7d5f0;color:#315795}.summary-details{margin-bottom:20px}.summary-details>summary{cursor:pointer;color:#596575;font-size:13px;padding:10px 0}.summary-details .stats{margin-top:10px}.decision-explanation{background:#f7f8fb;border:1px solid #e3e6ec;padding:16px;border-radius:10px;margin:20px 0}.decision-explanation h3:first-child{margin-top:0}

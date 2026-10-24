@@ -72,6 +72,7 @@ class Input(BaseModel):
 
 class CreateProject(Input):
     name: str = Field(default='Startup cloud comparison', min_length=1, max_length=120)
+    kind: Literal['cloud_demo', 'draft'] = 'cloud_demo'
     auto_start: bool = False
     mode: Literal['single', 'specialists'] = 'specialists'
     objective: str = Field(default='Compare AWS, Azure, and Google Cloud for a startup. Prioritize cost and deployment simplicity.', min_length=10, max_length=2000)
@@ -161,6 +162,9 @@ def create_project(body: CreateProject, background_tasks: BackgroundTasks):
 def create_project_record(body: CreateProject):
     project = uid('P')
     template = json.loads((ROOT / 'scenarios/cloud_comparison.json').read_text(encoding='utf-8'))
+    if body.kind == 'draft':
+        template = {'version':1, 'constraints':[], 'approved_topics':['DRAFT'],
+                    'milestones':[{'id':'M1','title':'Draft your response','allowed_topics':['DRAFT'],'status':'ACTIVE'}]}
     goal = GoalContract.model_validate({**template, 'project_id':project, 'objective':body.objective})
     with store() as current:
         # Both approved goal and product metadata are persisted in one transaction.
@@ -237,6 +241,8 @@ def start_session(project: str, body: StartSession):
         require_project(current,project)
         if active_work(current,project):
             raise HTTPException(409,'A step is already running')
+        if current.current_contract(project).approved_topics == ['DRAFT']:
+            body = StartSession(mode='single')
         session = uid('S')
         with current._transaction():
             current.db.execute('INSERT INTO sessions VALUES(?,?)',(session,project))
@@ -352,6 +358,8 @@ def complete_milestone(project: str, milestone: str):
 def propose_change(project: str, body: ChangeRequest):
     with store() as current:
         goal = require_project(current,project)
+        if goal.approved_topics == ['DRAFT']:
+            raise HTTPException(409, 'Serverless expansion belongs to the cloud demo. Create a new general request to change objectives.')
         change = GoalChange(change_id=uid('C'),project_id=project,base_version=goal.version,added_topics=[body.topic],
                             added_milestones=[Milestone(id='M5',title='Compare serverless options',allowed_topics=[body.topic])],
                             rationale='User requested a serverless comparison')
@@ -457,7 +465,7 @@ def reset_demo(body: ResetDemo):
             raise HTTPException(409,'Finish the running step first')
         meta = current.db.execute('SELECT name FROM app_projects WHERE id=?',(body.project_id,)).fetchone()
         name = meta[0] if meta else 'Cloud comparison'
-    created = create_project_record(CreateProject(name=name[:100] + ' / fresh demo',objective=goal.objective))
+    created = create_project_record(CreateProject(name=name[:100] + ' / fresh copy',objective=goal.objective,kind='draft' if goal.approved_topics == ['DRAFT'] else 'cloud_demo'))
     return {**created,'previous_project_id':body.project_id,'history_preserved':True}
 
 
@@ -543,6 +551,8 @@ def start_workflow(project: str, body: StartSession, background_tasks: Backgroun
         require_project(current, project)
         if active_work(current, project):
             raise HTTPException(409, 'A workflow or step is already running')
+        if current.current_contract(project).approved_topics == ['DRAFT']:
+            body = StartSession(mode='single')
         previous = workflow_view(current, project)
         if not previous:
             for (key,) in current.db.execute('SELECT id FROM actions WHERE project=?', (project,)):
@@ -580,3 +590,26 @@ def report_provider_wait(session, delay):
         message = f'Groq rate limit: waiting {delay:g} seconds before one automatic retry.'
         current.db.execute("UPDATE app_workflows SET message=? WHERE session=? AND state='RUNNING'", (message, session))
         current._event(info['project_id'], 'PROVIDER_WAIT', {'session_id':session, 'message':message})
+
+
+class RevisionRequest(Input):
+    feedback: str = Field(min_length=10, max_length=2000)
+
+
+@app.post('/api/actions/{action}/revise', status_code=202)
+def revise_action(action: str, body: RevisionRequest, background_tasks: BackgroundTasks):
+    with store() as current, current._transaction():
+        result = current.action_result(action)
+        if not result:
+            raise HTTPException(404, 'Action not found')
+        if active_work(current, result.action.project_id):
+            raise HTTPException(409, 'Wait for the current run to finish')
+        if current.action_review(action) or result.committed or result.validation.decision != 'REVIEW':
+            raise HTTPException(409, 'Only a pending review can request changes')
+        current.resolve_action(action, references(), approve=False, actor='local-operator', reason=body.feedback)
+        session = result.action.session_id
+        current.db.execute("UPDATE app_sessions SET status='IDLE',pending_action=NULL WHERE id=?", (session,))
+        current.db.execute("INSERT INTO app_workflows VALUES(?,?,'RUNNING','Applying your feedback to a new draft.') ON CONFLICT(session) DO UPDATE SET state='RUNNING',message=excluded.message", (session, result.action.project_id))
+        current._event(result.action.project_id, 'REVISION_REQUESTED', {'action_id':action, 'message':body.feedback})
+    background_tasks.add_task(drive_workflow, session)
+    return {'status':'REVISING', 'session_id':session}

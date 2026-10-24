@@ -54,7 +54,7 @@ export function WorkflowBoard({project,running,handoffs,onReview,onResearch}:{pr
         <span className="flow-connector"><ArrowRight size={14}/></span>
         <div className="flow-node"><span className="node-icon peach"><FileCheck2 size={21}/></span><small>03 · COMMIT</small><h3>Saved report</h3><p>Save approved sections</p><span className="node-status"><FileText size={12}/>{project.artifacts.length} saved {project.artifacts.length===1?'section':'sections'}</span></div>
       </div>
-      <details className="secondary-details"><summary>Execution details</summary><ol className="workflow-stages" aria-label="Persisted workflow stages">{stages.map(stage=><li key={stage.name}><strong>{stage.name}</strong><span>{stage.state}</span></li>)}</ol></details>
+      <details className="secondary-details" open={running||pending||pendingResearch}><summary>Execution progress</summary><ol className="workflow-stages" aria-label="Persisted workflow stages">{stages.map(stage=><li key={stage.name}><strong>{stage.name}</strong><span>{stage.state}</span></li>)}</ol></details>
       <div className="canvas-footer"><span><ShieldCheck size={13}/>Using contract v{project.contract.version}</span><button onClick={pendingResearch?onResearch:onReview}>{pendingResearch?'Inspect research':'Inspect actions'}<ChevronRight size={13}/></button></div>
     </div>
   </section>;
