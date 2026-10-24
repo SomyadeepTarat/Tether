@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tether-engine"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.10,<3"]
+dependencies = ["pydantic>=2.10,<3", "python-dotenv>=1.0,<2", "certifi>=2024.2.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1"]

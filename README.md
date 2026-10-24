@@ -24,7 +24,7 @@ Open http://127.0.0.1:3000. API docs: http://127.0.0.1:8000/docs. Use a single b
 
 ## Provider configuration
 
-Set variables in the backend environment. .env files are not loaded automatically; .env.example contains placeholders only. Credentials never belong in NEXT_PUBLIC variables, tracked files or persisted events. Use a Groq Free plan account without enabling paid billing.
+Set variables in the backend environment or the ignored root .env file, which is loaded automatically. Explicit process variables take precedence; .env.example contains placeholders only. Credentials never belong in NEXT_PUBLIC variables, tracked files or persisted events. Use a Groq Free plan account without enabling paid billing.
 
 - TETHER_PROVIDER=groq (default): hosted primary with eligible-failure Ollama backup.
 - TETHER_PROVIDER=groq-only: no fallback, for honest provider-only measurements.
@@ -41,12 +41,12 @@ Hosted report requests send the objective, constraints, synthetic fixture and va
 
 1. Create a cloud-comparison project and start a session.
 2. Run a controlled step; the real engine generates a typed AgentAction and validates it before commit.
-3. Exact supported quotations may ALLOW automatically. Arbitrary prose is REVIEW; hard violations BLOCK. Semantic review approval is not implemented, so the UI cannot bypass the engine. REVIEW can be rejected.
+3. Exact supported quotations may ALLOW automatically. Arbitrary prose is REVIEW; hard violations BLOCK. REVIEW can be explicitly approved with an evidence-based explanation or rejected in the Drift inspector. Approval rechecks mandatory rules and the report revision; BLOCK cannot be overridden. Source summaries are visible alongside each citation.
 4. Confirm an active milestone complete only after inspecting its committed supporting artifact. This advances execution state without mutating approved contract snapshots.
 5. Propose and approve SERVERLESS to create immutable contract v2.
 6. Restart and restore checkpoints/current contract/artifacts. Reuse action_id on POST /api/sessions/{id}/step to replay without generation; interrupted specialist steps resume their validated handoff.
 
-New sessions default to single agent. The UI also offers explicit local specialists. The engine's specialist function itself supports configured providers for separately authorized use. Evaluation remains an empty state until independent measured runs exist. SYNTHETIC_DEMONSTRATION fixture values are invented, not current cloud prices or deployment measurements. The narrow quotation report is not a finished recommendation.
+New sessions default to single agent. The UI also offers explicit local specialists. The engine's specialist function itself supports configured providers for separately authorized use. Evaluation reads persisted proposal-level baseline/Tether runs; it stays empty until the evaluation CLI records actual calls. SYNTHETIC_DEMONSTRATION fixture values are invented, not current cloud prices or deployment measurements. Comparison and recommendation steps synthesize the supplied evidence and require human review.
 
 ## Existing data
 
@@ -80,4 +80,25 @@ CLI defaults to TETHER_DB or runtime/tether.sqlite3. Runtime outputs are ignored
 - backend/store.py: product metadata, safe legacy migration and engine Store adapter.
 - frontend/: three-tab dashboard and typed API view models.
 
-Remaining: comprehensive semantic review resolution, independent baseline evaluation/charts, broader presentation polish and project-scoped demo reset. No fabricated success or performance metrics.
+The Fresh demo control starts a clean project and retains the original project/history. Remaining: comprehensive semantic drift classification and a full multi-session independent evaluation suite (the current runner evaluates individual proposals), broader charts and presentation polish. No fabricated success or performance metrics.
+
+
+## Measured proposal evaluation
+
+Use an existing project ID and the same database as the backend. The runner tests
+clean and drift-note inputs in baseline and Tether modes with identical planner
+inputs/budget. Baseline commits are simulated in evaluation output only; they never
+write to the product report. Actual model responses and raw settings are saved
+under `runtime/evaluations/`. The dashboard reads persisted summaries after refresh.
+
+```sh
+PYTHONPATH=. .venv/bin/python scripts/evaluate.py --db backend/data/tether.sqlite3 \
+  --project YOUR_PROJECT_ID --provider ollama --repeats 1
+```
+
+Use `--provider groq-only` for an authorized hosted benchmark with a configured key.
+Automatic provider fallback is disabled for comparisons. Arbitrary prose is graded
+UNVERIFIED rather than assumed correct. Unauthorized rate is N/A when nothing
+commits. These are proposal simulations, not a completed four-session benchmark.
+
+See [pull verification and changes](docs/PULL_VERIFICATION.md) for current findings.

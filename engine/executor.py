@@ -9,13 +9,18 @@ from pathlib import Path
 from engine.schemas import AgentAction, GoalContract, StepResult
 from engine.validator import validate_action
 from engine.state import LifecycleStore
+from engine.review import ReviewStore
 
-class Store(LifecycleStore):
+class Store(LifecycleStore, ReviewStore):
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, isolation_level=None)
         self.db.executescript('''
         PRAGMA foreign_keys=ON;
+        CREATE TABLE IF NOT EXISTS evaluation_runs(id TEXT PRIMARY KEY, project TEXT, body TEXT);
+        CREATE TABLE IF NOT EXISTS action_bases(action_id TEXT PRIMARY KEY, prior_action TEXT);
+        CREATE TABLE IF NOT EXISTS action_reviews(action_id TEXT PRIMARY KEY, decision TEXT, actor TEXT, reason TEXT);
+
         CREATE TABLE IF NOT EXISTS milestone_state(project TEXT, milestone TEXT, status TEXT,
             PRIMARY KEY(project,milestone));
         CREATE TABLE IF NOT EXISTS changes(id TEXT PRIMARY KEY, project TEXT, body TEXT, status TEXT, actor TEXT);
@@ -77,8 +82,10 @@ class Store(LifecycleStore):
             if session is None or session[0] != action.project_id:
                 raise ValueError("Unknown session or project mismatch")
             contract = self.effective_contract(action.project_id)
-            validation = validate_action(action, contract, action.session_id, references,
-                                         set(self.sections(action.project_id)))
+            validation = self.validate_current_action(action, references)
+            base = self.db.execute('SELECT action_id FROM artifacts WHERE project=? AND section=?',
+                                   (action.project_id,action.arguments.section_id)).fetchone()
+            self.db.execute('INSERT INTO action_bases VALUES(?,?)', (action.action_id, base[0] if base else None))
             committed = validation.decision == "ALLOW"
             result = StepResult(action=action, validation=validation, committed=committed)
             self.db.execute("INSERT INTO actions VALUES(?,?,?,?)", (
@@ -123,13 +130,20 @@ class Store(LifecycleStore):
 
     def _transaction(self):
         from contextlib import contextmanager
+        from uuid import uuid4
         @contextmanager
         def transaction():
-            self.db.execute("BEGIN IMMEDIATE")
+            nested = self.db.in_transaction
+            name = 'tether_' + uuid4().hex
+            self.db.execute('SAVEPOINT ' + name if nested else 'BEGIN IMMEDIATE')
             try:
                 yield
-                self.db.execute("COMMIT")
+                self.db.execute('RELEASE SAVEPOINT ' + name if nested else 'COMMIT')
             except BaseException:
-                self.db.execute("ROLLBACK")
+                if nested:
+                    self.db.execute('ROLLBACK TO SAVEPOINT ' + name)
+                    self.db.execute('RELEASE SAVEPOINT ' + name)
+                else:
+                    self.db.execute('ROLLBACK')
                 raise
         return transaction()

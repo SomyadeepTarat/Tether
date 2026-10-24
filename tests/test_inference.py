@@ -22,9 +22,13 @@ def client():
     return FallbackClient(GroqClient(api_key='test-secret'), OllamaClient())
 
 def test_groq_success_and_secret_not_logged(monkeypatch):
-    def respond(request,timeout):
+    def respond(request,timeout,**kwargs):
         payload=json.loads(request.data)
         assert request.get_header('Authorization') == 'Bearer test-secret'
+        assert request.get_header('User-agent') == 'Tether/0.1'
+        import ssl
+        assert kwargs['context'].verify_mode == ssl.CERT_REQUIRED
+        assert kwargs['context'].check_hostname
         assert payload['model']=='openai/gpt-oss-20b'
         assert payload['reasoning_effort']=='low'
         assert payload['response_format']['json_schema']['strict'] is True
@@ -56,7 +60,7 @@ def test_strict_schema_handles_nested_defaults_without_mutation():
 @pytest.mark.parametrize('status',[401,403,408,429,498,500,503])
 def test_http_failure_falls_back_once(monkeypatch,status):
     requests=[]
-    def respond(request,timeout):
+    def respond(request,timeout,**kwargs):
         requests.append(request.full_url)
         if 'api.groq.com' in request.full_url:
             raise HTTPError(request.full_url,status,'secret error body',{},io.BytesIO())
@@ -71,7 +75,7 @@ def test_http_failure_falls_back_once(monkeypatch,status):
 
 @pytest.mark.parametrize('error',[URLError('network unavailable'),TimeoutError()])
 def test_network_failure_falls_back(monkeypatch,error):
-    def respond(request,timeout):
+    def respond(request,timeout,**kwargs):
         if 'api.groq.com' in request.full_url:
             raise error
         return ollama_response()
@@ -82,7 +86,7 @@ def test_network_failure_falls_back(monkeypatch,error):
 
 def test_missing_key_skips_remote_request(monkeypatch):
     requests=[]
-    def respond(request,timeout):
+    def respond(request,timeout,**kwargs):
         requests.append(request.full_url)
         return ollama_response()
     monkeypatch.setattr(adapter,'urlopen',respond)
@@ -93,7 +97,7 @@ def test_missing_key_skips_remote_request(monkeypatch):
     assert c.calls[-1]['fallback_reason']=='missing_credentials'
 
 def test_invalid_groq_output_retries_then_falls_back(monkeypatch):
-    def respond(request,timeout):
+    def respond(request,timeout,**kwargs):
         return groq_response('{}') if 'api.groq.com' in request.full_url else ollama_response()
     monkeypatch.setattr(adapter,'urlopen',respond)
     c=client()
@@ -103,7 +107,7 @@ def test_invalid_groq_output_retries_then_falls_back(monkeypatch):
 
 @pytest.mark.parametrize('status',[400,404,422])
 def test_bad_request_does_not_hide_configuration_error(monkeypatch,status):
-    def respond(request,timeout):
+    def respond(request,timeout,**kwargs):
         raise HTTPError(request.full_url,status,'bad configuration',{},io.BytesIO())
     monkeypatch.setattr(adapter,'urlopen',respond)
     c=client()
@@ -131,3 +135,19 @@ def test_provider_selection(monkeypatch):
     assert isinstance(create_inference_client('groq-only'),GroqClient)
     assert isinstance(create_inference_client('ollama'),OllamaClient)
     with pytest.raises(ValueError): create_inference_client('other')
+
+
+def test_env_file_load_does_not_override_explicit_process_settings(tmp_path,monkeypatch):
+    from engine.config import load_environment
+    path=tmp_path/'.env'
+    path.write_text('TETHER_TEST_SETTING=from-file\nTETHER_ANOTHER_TEST=loaded\n')
+    monkeypatch.setenv('TETHER_TEST_SETTING','explicit')
+    monkeypatch.delenv('TETHER_ANOTHER_TEST',raising=False)
+    try:
+        load_environment(path)
+        import os
+        assert os.environ['TETHER_TEST_SETTING']=='explicit'
+        assert os.environ['TETHER_ANOTHER_TEST']=='loaded'
+    finally:
+        import os
+        os.environ.pop('TETHER_ANOTHER_TEST',None)

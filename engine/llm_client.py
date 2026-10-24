@@ -2,6 +2,8 @@
 import json
 import os
 import time
+import ssl
+import certifi
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Protocol, TypeVar
@@ -67,11 +69,14 @@ class _StructuredClient:
             try:
                 if self.provider == "groq" and not self.api_key:
                     raise InferenceError(self.provider, "missing_credentials")
-                headers = {"Content-Type": "application/json"}
+                headers = {"Content-Type": "application/json", "User-Agent": "Tether/0.1"}
                 if self.provider == "groq":
                     headers["Authorization"] = f"Bearer {self.api_key}"
                 request = Request(self.endpoint, data=json.dumps(payload).encode(), headers=headers)
-                with urlopen(request, timeout=self.timeout) as response:
+                transport = {}
+                if self.provider == "groq":
+                    transport["context"] = ssl.create_default_context(cafile=os.getenv("SSL_CERT_FILE") or certifi.where())
+                with urlopen(request, timeout=self.timeout, **transport) as response:
                     raw = json.load(response)
                 record["response"] = raw
                 content = self._content(raw)
@@ -187,6 +192,8 @@ class FallbackClient:
 
 def create_inference_client(provider=None) -> InferenceClient:
     """TETHER_PROVIDER=groq (default, with backup), groq-only, or ollama."""
+    from engine.config import load_environment
+    load_environment()
     selected = provider or os.getenv("TETHER_PROVIDER", "groq")
     if selected == "ollama":
         return OllamaClient()

@@ -1,5 +1,9 @@
 # Tether implementation update for the full-stack agent
 
+Latest follow-up: see PULL_VERIFICATION.md for human review, evaluation, automatic
+root .env loading and verified live Groq report execution. Earlier setup/verification
+status below is historical.
+
 Follow-up: engine lifecycle services are now implemented; read LIFECYCLE_UPDATE.md
 for goal changes, milestone progress, handoffs and new integration methods.
 The provider plan in this document remains current.

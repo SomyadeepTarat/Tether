@@ -12,6 +12,8 @@ from engine.schemas import GoalContract, Reference
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
+    from engine.config import load_environment
+    load_environment()
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["single", "specialists"], default="single")
     parser.add_argument("--provider", choices=["groq", "groq-only", "ollama"])

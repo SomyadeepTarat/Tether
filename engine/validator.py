@@ -40,6 +40,8 @@ def validate_action(action: AgentAction, contract: GoalContract, session_id: str
             blocked.append(f"Unknown source: {rid}")
         elif not source_authorized(refs[rid], action.topic, contract):
             blocked.append(f"Source topic mismatch: {rid}")
+    if action.topic == "COST" and not effects.numerical_claims:
+        blocked.append("Cost section must include supported numerical evidence")
     content = action.arguments.content
     if "SYNTHETIC_DEMONSTRATION" not in content:
         blocked.append("Artifact must label synthetic demonstration data")

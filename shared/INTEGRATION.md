@@ -66,3 +66,25 @@ HandoffResult, WorkflowResult. Existing StepResult remains unchanged. The backen
 must authenticate approval/completion actors; the engine does not authenticate
 caller identity. Use effective_contract() for live milestone status and
 contracts()/current_contract() for immutable approved history.
+
+## Review/evaluation integration update
+
+Store.resolve_action(action_id, references, approve=..., actor=..., reason=...) now
+resolves REVIEW. Authenticated human identity comes from the trusted backend; an
+agent cannot supply it. Approval requires an explanation, rechecks mandatory
+constraints/current contract and the saved report revision, and preserves the
+original REVIEW decision alongside a separate USER_APPROVED event. BLOCK remains
+non-overridable. Additive tables: action_bases, action_reviews, evaluation_runs.
+
+GET /api/projects/{id}/references exposes approved synthetic source summaries for
+human inspection. POST /api/sessions/{id}/pending/decision accepts REJECT for
+uncertain/blocked research, allowing a fresh step key. Rejected keys cannot resume.
+POST /api/demo/reset takes project_id and creates a fresh demo project while
+preserving all previous history. GET metrics reads actual persisted evaluation
+runs. The evaluation CLI never writes baseline output to product artifacts.
+
+Root .env is now loaded automatically by the backend/provider factory/CLI; explicit
+process environment wins. Groq uses verified TLS via certifi (or SSL_CERT_FILE)
+and an application User-Agent. Groq-only live probe and report/commit/replay are
+verified; see docs/PULL_VERIFICATION.md for measured smoke timings and limitations.
+Historical feedback omits obsolete action identities to avoid copying old keys.

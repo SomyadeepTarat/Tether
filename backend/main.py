@@ -16,6 +16,9 @@ from starlette.responses import JSONResponse
 from backend.inference import configuration, create_client
 from backend.store import AppStore, now, prepare_database
 from engine.orchestrator import run_step, run_specialist_step
+from engine.config import load_environment
+
+load_environment()
 from engine.schemas import GoalChange, GoalContract, Milestone, Reference
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,12 +82,20 @@ class StepRequest(Input):
     action_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,100}$')
 
 
+class ResetDemo(Input):
+    project_id: str = Field(min_length=1)
+
+
 class ChangeRequest(Input):
     topic: Literal['SERVERLESS'] = 'SERVERLESS'
 
 
 class Decision(Input):
     decision: Literal['APPROVE', 'REJECT']
+
+
+class ReviewDecision(Decision):
+    reason: str = Field(default='', max_length=2000)
 
 
 def uid(prefix):
@@ -126,7 +137,7 @@ def proposal_view(action):
 @app.get('/api/health')
 def health(response: Response):
     response.set_cookie('tether_operator', OPERATOR_TOKEN, httponly=True, samesite='strict', path='/', max_age=86400)
-    return {'status':'ok', **configuration(), 'engine_available':True, 'review_approval_available':False}
+    return {'status':'ok', **configuration(), 'engine_available':True, 'review_approval_available':True}
 
 
 @app.get('/api/projects')
@@ -170,11 +181,12 @@ def project_view(current, project):
     for (key,) in current.db.execute('SELECT id FROM actions WHERE project=? ORDER BY rowid DESC', (project,)):
         result = current.action_result(key)
         action = result.action
+        review = current.action_review(key)
         resolution = current.db.execute('SELECT disposition FROM app_resolutions WHERE action_id=?', (key,)).fetchone()
         actions.append({'id':key, 'session_id':action.session_id, 'body':proposal_view(action), 'action':action.model_dump(mode='json'),
                         'validation':result.validation.model_dump(mode='json'), 'committed':result.committed,
                         'decision':result.validation.decision, 'reason':'; '.join(result.validation.reasons) or 'All mandatory checks passed',
-                        'created_at':times.get(key,''), 'inference':inference.get(key), 'resolution':resolution[0] if resolution else None})
+                        'created_at':times.get(key,''), 'inference':inference.get(key), 'resolution':review['decision'] if review else resolution[0] if resolution else None, 'review':review})
     for (key,) in current.db.execute('SELECT action_id FROM artifacts WHERE project=? ORDER BY section', (project,)):
         result = current.action_result(key)
         artifacts.append(proposal_view(result.action))
@@ -204,7 +216,7 @@ def contracts(project: str):
 
 @app.post('/api/projects/{project}/sessions', status_code=201)
 def start_session(project: str, body: StartSession):
-    with store() as current:
+    with store() as current, current._transaction():
         require_project(current,project)
         if active_work(current,project):
             raise HTTPException(409,'A step is already running')
@@ -232,6 +244,9 @@ def step(session: str, body: StepRequest):
             info = require_session(current,session)
             project = info['project_id']
             action_id = body.action_id or info['pending_action'] or uid('A')
+            abandoned = current.db.execute("SELECT 1 FROM app_resolutions WHERE action_id=? AND disposition='REJECTED_HANDOFF'",(action_id,)).fetchone()
+            if abandoned:
+                raise HTTPException(409,'This research proposal was rejected; use a new step key')
             prior = current.action_result(action_id)
             if prior:
                 if prior.action.session_id != session or prior.action.project_id != project:
@@ -265,25 +280,32 @@ def step(session: str, body: StepRequest):
 
 
 @app.post('/api/actions/{action}/decision')
-def decide_action(action: str, body: Decision):
-    with store() as current:
+def decide_action(action: str, body: ReviewDecision):
+    with store() as current, current._transaction():
         result = current.action_result(action)
         if not result:
             raise HTTPException(404,'Action not found')
-        if result.validation.decision != 'REVIEW':
-            raise HTTPException(409,'Only pending REVIEW actions can be resolved')
-        if body.decision == 'APPROVE':
-            raise HTTPException(409,'Semantic review approval is not implemented in the current engine. No artifact was committed.')
-        with current._transaction():
-            current.db.execute("INSERT OR IGNORE INTO app_resolutions VALUES(?,'REJECTED')",(action,))
-            current.db.execute("UPDATE app_sessions SET status='IDLE' WHERE id=?",(result.action.session_id,))
-            current._event(result.action.project_id,'USER_REJECTED',{'action_id':action,'actor':'local-operator'})
-        return {'status':'REJECTED'}
+        if active_work(current,result.action.project_id):
+            raise HTTPException(409,'Finish the running step first')
+        legacy = current.db.execute('SELECT disposition FROM app_resolutions WHERE action_id=?',(action,)).fetchone()
+        if legacy and legacy[0] == 'REJECTED' and body.decision == 'APPROVE':
+            raise HTTPException(409,'Review decision is final')
+        try:
+            resolution = current.resolve_action(action,references(),approve=body.decision == 'APPROVE',
+                                                actor='local-operator',reason=body.reason)
+        except ValueError as exc:
+            conflict(exc)
+        checkpoint = current.restore_checkpoint(result.action.session_id)
+        if checkpoint.get('last_action_id') == action:
+            with current._transaction():
+                current.db.execute('UPDATE app_sessions SET status=? WHERE id=?',
+                                   (checkpoint['state'],result.action.session_id))
+        return {'status':resolution['decision']}
 
 
 @app.post('/api/projects/{project}/milestones/{milestone}/complete')
 def complete_milestone(project: str, milestone: str):
-    with store() as current:
+    with store() as current, current._transaction():
         require_project(current,project)
         if active_work(current,project):
             raise HTTPException(409,'Finish the running step first')
@@ -309,7 +331,7 @@ def propose_change(project: str, body: ChangeRequest):
 
 @app.post('/api/changes/{change}/decision')
 def decide_change(change: str, body: Decision):
-    with store() as current:
+    with store() as current, current._transaction():
         try:
             saved = current.goal_change(change)
         except ValueError as exc:
@@ -330,6 +352,13 @@ def timeline(project: str):
         return [{**e,'message':e['body'].get('message') or e['kind'].replace('_',' ').capitalize(), 'created_at':e['body'].get('_recorded_at','')} for e in reversed(current.timeline(project))]
 
 
+@app.get('/api/projects/{project}/references')
+def source_references(project: str):
+    with store() as current:
+        goal = require_project(current,project)
+        return [r.model_dump(mode='json') for r in references() if r.topic in goal.approved_topics]
+
+
 @app.get('/api/projects/{project}/report')
 def report(project: str):
     return {'sections':get_project(project)['artifacts'],'label':'SYNTHETIC_DEMONSTRATION'}
@@ -337,15 +366,40 @@ def report(project: str):
 
 @app.get('/api/projects/{project}/metrics')
 def metrics(project: str):
-    get_project(project)
-    return {'runs':[], 'message':'No independent evaluation runs recorded.'}
+    with store() as current:
+        require_project(current,project)
+        runs=[json.loads(row[0]) for row in current.db.execute('SELECT body FROM evaluation_runs WHERE project=? ORDER BY rowid DESC',(project,))]
+        return {'runs':runs, 'message':'Measured proposal evaluations; consult each run for grading limits.' if runs else 'No independent evaluation runs recorded.'}
 
 
 @app.get('/api/sessions/{session}/handoffs')
 def handoffs(session: str):
     with store() as current:
         info = require_session(current,session)
-        return {'handoffs':[h.model_dump(mode='json') for h in current.handoffs(session)],'mode':info['mode']}
+        return {'handoffs':[{**h.model_dump(mode='json'), 'resolution': 'REJECTED' if current.db.execute("SELECT 1 FROM app_resolutions WHERE action_id=? AND disposition='REJECTED_HANDOFF'",(h.handoff.handoff_id.removesuffix(':research'),)).fetchone() else None} for h in current.handoffs(session)],'mode':info['mode']}
+
+
+@app.post('/api/sessions/{session}/pending/decision')
+def reject_pending_handoff(session: str, body: Decision):
+    if body.decision != 'REJECT':
+        raise HTTPException(409,'Research evidence cannot be approved through this endpoint')
+    with store() as current, current._transaction():
+        info = require_session(current,session)
+        if active_work(current,info['project_id']):
+            raise HTTPException(409,'Finish the running step first')
+        key = info['pending_action']
+        result = current.handoff_result(key + ':research') if key else None
+        if not result or result.validation.decision == 'ALLOW':
+            raise HTTPException(409,'No pending rejected or uncertain research proposal')
+        current.db.execute("INSERT OR IGNORE INTO app_resolutions VALUES(?,'REJECTED_HANDOFF')",(key,))
+        current.db.execute("UPDATE app_sessions SET status='IDLE',pending_action=NULL WHERE id=?",(session,))
+        checkpoint = current.restore_checkpoint(session)
+        checkpoint.pop('artifacts',None);checkpoint.pop('contract',None);checkpoint.pop('handoffs',None)
+        checkpoint.pop('pending_action_id',None)
+        checkpoint['state']='IDLE'
+        current.db.execute('UPDATE checkpoints SET body=? WHERE session=?',(json.dumps(checkpoint),session))
+        current._event(info['project_id'],'HANDOFF_REJECTED',{'action_id':key,'actor':'local-operator'})
+        return {'status':'REJECTED'}
 
 
 @app.post('/api/projects/{project}/recover')
@@ -357,6 +411,20 @@ def recover(project: str):
         with current._transaction():
             current._event(project,'RECOVERY',{'message':'Current contract, report and checkpoints restored without inference'})
         return project_view(current,project)
+
+
+@app.post('/api/demo/reset', status_code=201)
+def reset_demo(body: ResetDemo):
+    # Start a fresh demonstration while retaining the original project's audit,
+    # artifacts and approvals. No destructive delete or silent reauthorization.
+    with store() as current:
+        goal = require_project(current,body.project_id)
+        if active_work(current,body.project_id):
+            raise HTTPException(409,'Finish the running step first')
+        meta = current.db.execute('SELECT name FROM app_projects WHERE id=?',(body.project_id,)).fetchone()
+        name = meta[0] if meta else 'Cloud comparison'
+    created = create_project(CreateProject(name=name[:100] + ' / fresh demo',objective=goal.objective))
+    return {**created,'previous_project_id':body.project_id,'history_preserved':True}
 
 
 @app.get('/api/projects/{project}/archive')

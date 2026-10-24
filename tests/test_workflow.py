@@ -259,3 +259,85 @@ def test_telemetry_redacts_credentials():
     with patch.dict(os.environ,{'GROQ_API_KEY':'private-test-key'}):
         value=json.dumps(public_attempts([{'provider':'groq','request':'hidden prompt','fallback_reason':'private-test-key gsk_secret123'}]))
     assert 'private-test-key' not in value and 'gsk_secret123' not in value and 'hidden prompt' not in value
+
+def test_explicit_review_approval_commits_and_survives_replay(web):
+    project,session=project_session(web)
+    with patch.object(api,'create_client',return_value=Model(prose=True)):
+        proposal=web.post(f'/api/sessions/{session}/step',json={'action_id':'A-REVIEW'}).json()
+    assert not proposal['committed']
+    approved=web.post('/api/actions/A-REVIEW/decision',json={'decision':'APPROVE','reason':'Verified the cited evidence and startup recommendation.'})
+    assert approved.status_code==200,approved.text
+    assert approved.json()['status']=='APPROVED'
+    state=web.get(f'/api/projects/{project}').json()
+    assert state['actions'][0]['resolution']=='APPROVED'
+    assert state['actions'][0]['decision']=='REVIEW' and state['actions'][0]['committed']
+    assert len(state['artifacts'])==1
+    with patch.object(api,'create_client',side_effect=AssertionError('Replay must not infer')):
+        replay=web.post(f'/api/sessions/{session}/step',json={'action_id':'A-REVIEW'}).json()
+    assert replay['replayed'] and replay['committed']
+    assert web.post('/api/actions/A-REVIEW/decision',json={'decision':'REJECT'}).status_code==409
+
+
+def test_review_approval_cannot_bypass_new_contract(web):
+    project,session=project_session(web)
+    with patch.object(api,'create_client',return_value=Model(prose=True)):
+        web.post(f'/api/sessions/{session}/step',json={'action_id':'A-STALE'})
+    change=web.post(f'/api/projects/{project}/changes',json={}).json()['id']
+    assert web.post(f'/api/changes/{change}/decision',json={'decision':'APPROVE'}).status_code==200
+    result=web.post('/api/actions/A-STALE/decision',json={'decision':'APPROVE','reason':'Reviewed against the previous version.'})
+    assert result.status_code==409 and 'mandatory' in result.json()['detail']
+    assert web.get(f'/api/projects/{project}/report').json()['sections']==[]
+
+def test_metrics_reads_persisted_measured_runs_only(web):
+    from engine.evaluator import save_evaluation
+    project,session=project_session(web)
+    assert web.get(f'/api/projects/{project}/metrics').json()['runs']==[]
+    with api.store() as current:
+        save_evaluation(current,{'id':'E-MEASURED','project_id':project,'mode':'tether','status':'FAILED',
+                                 'kind':'PROPOSAL_EVALUATION','error':'InferenceError'})
+    data=web.get(f'/api/projects/{project}/metrics').json()
+    assert data['runs'][0]['id']=='E-MEASURED'
+    assert data['runs'][0]['status']=='FAILED'
+    assert web.get(f'/api/projects/{project}/report').json()['sections']==[]
+
+def test_sources_are_available_for_human_review_and_respect_scope(web):
+    project,session=project_session(web)
+    records=web.get(f'/api/projects/{project}/references').json()
+    assert records and all(r['label']=='SYNTHETIC_DEMONSTRATION' for r in records)
+    assert 'SERVERLESS' not in {r['topic'] for r in records}
+    change=web.post(f'/api/projects/{project}/changes',json={}).json()['id']
+    web.post(f'/api/changes/{change}/decision',json={'decision':'APPROVE'})
+    assert 'SERVERLESS' in {r['topic'] for r in web.get(f'/api/projects/{project}/references').json()}
+
+
+def test_uncertain_research_can_be_rejected_then_replanned(web):
+    project,session=project_session(web,mode='specialists')
+    class Uncertain(Model):
+        def generate(self,schema,system,prompt):
+            output=super().generate(schema,system,prompt)
+            return output.model_copy(update={'unresolved_questions':['Evidence needs inspection']})
+    with patch.object(api,'create_client',return_value=Uncertain()):
+        first=web.post(f'/api/sessions/{session}/step',json={'action_id':'A-UNCERTAIN'})
+    assert first.json()['state']=='AWAITING_REVIEW'
+    assert web.post(f'/api/sessions/{session}/pending/decision',json={'decision':'APPROVE'}).status_code==409
+    assert web.post(f'/api/sessions/{session}/pending/decision',json={'decision':'REJECT'}).status_code==200
+    assert web.get(f'/api/sessions/{session}').json()['pending_action'] is None
+    assert web.get(f'/api/sessions/{session}/handoffs').json()['handoffs'][0]['resolution']=='REJECTED'
+    assert web.post(f'/api/sessions/{session}/step',json={'action_id':'A-UNCERTAIN'}).status_code==409
+    with patch.object(api,'create_client',return_value=Model()):
+        fresh=web.post(f'/api/sessions/{session}/step',json={})
+    assert fresh.json()['step']['committed']
+    assert fresh.json()['step']['action']['action_id']!='A-UNCERTAIN'
+
+def test_demo_reset_preserves_original_history(web):
+    project,session=project_session(web)
+    with patch.object(api,'create_client',return_value=Model()):
+        web.post(f'/api/sessions/{session}/step',json={})
+    old=web.get(f'/api/projects/{project}').json()
+    reset=web.post('/api/demo/reset',json={'project_id':project})
+    assert reset.status_code==201,reset.text
+    assert reset.json()['history_preserved']
+    fresh=web.get('/api/projects/'+reset.json()['id']).json()
+    assert fresh['id']!=project and fresh['contract']['version']==1
+    assert fresh['actions']==[] and fresh['artifacts']==[] and fresh['sessions']==[]
+    assert web.get(f'/api/projects/{project}').json()['artifacts']==old['artifacts']

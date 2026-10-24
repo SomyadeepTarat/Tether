@@ -1,4 +1,4 @@
-"""Temporary interface to the incoming engine; no provider logic is duplicated here."""
+"""Backend provider factory and telemetry allowlist; inference stays in the engine."""
 from dataclasses import asdict, is_dataclass
 from importlib import import_module
 import os
@@ -11,6 +11,8 @@ class EngineUnavailable(RuntimeError):
 
 
 def configuration():
+    from engine.config import load_environment
+    load_environment()
     provider = os.environ.get('TETHER_PROVIDER', 'groq')
     return {
         'provider': provider,
