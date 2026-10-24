@@ -20,19 +20,19 @@ def configuration():
     }
 
 
-def create_client():
+def create_client(provider=None):
     if configuration()['provider'] not in ('groq', 'groq-only', 'ollama'):
         raise EngineUnavailable('Invalid TETHER_PROVIDER. Use groq, groq-only, or ollama.')
     try:
         module = import_module('engine.llm_client')
     except ModuleNotFoundError as exc:
         raise EngineUnavailable('AI engine integration pending. The engine/ package has not been supplied yet.') from exc
-    return module.create_inference_client()
+    return module.create_inference_client(provider=provider)
 
 
 def public_attempts(calls: list[Any]) -> list[dict]:
     """Persist only the agreed telemetry fields, never raw prompts or credentials."""
-    fields = {'provider', 'model', 'started_at', 'attempt', 'schema_valid', 'elapsed_seconds', 'error_kind', 'http_status', 'fallback_from', 'fallback_reason'}
+    fields = {'provider', 'model', 'agent', 'started_at', 'attempt', 'schema_valid', 'elapsed_seconds', 'error_kind', 'http_status', 'fallback_from', 'fallback_reason'}
     attempts = []
     for call in calls:
         if hasattr(call, 'model_dump'):

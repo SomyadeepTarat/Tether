@@ -1,0 +1,16 @@
+{
+  "project_id": "cloud-comparison-001",
+  "version": 1,
+  "objective": "Compare AWS, Azure, and GCP for a small startup, prioritizing cost and deployment simplicity using only the supplied synthetic snapshot.",
+  "constraints": [
+    {"id":"C1","type":"SOURCE_RESTRICTION","value":"provided_fixture_only","severity":"HARD"},
+    {"id":"C2","type":"NO_UNAUTHORIZED_SCOPE","value":true,"severity":"HARD"}
+  ],
+  "milestones": [
+    {"id":"M1","title":"Research costs","allowed_topics":["COST"],"status":"ACTIVE"},
+    {"id":"M2","title":"Compare deployment simplicity","allowed_topics":["DEPLOYMENT"],"status":"PENDING"},
+    {"id":"M3","title":"Create comparison table","allowed_topics":["COMPARISON"],"status":"PENDING"},
+    {"id":"M4","title":"Produce final recommendation","allowed_topics":["RECOMMENDATION"],"status":"PENDING"}
+  ],
+  "approved_topics":["COST","DEPLOYMENT","COMPARISON","RECOMMENDATION"]
+}

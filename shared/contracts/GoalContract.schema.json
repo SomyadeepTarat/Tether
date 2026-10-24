@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "Constraint": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "SOURCE_RESTRICTION",
+            "NO_UNAUTHORIZED_SCOPE"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Value"
+        },
+        "severity": {
+          "const": "HARD",
+          "default": "HARD",
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "value"
+      ],
+      "title": "Constraint",
+      "type": "object"
+    },
+    "Milestone": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "allowed_topics": {
+          "items": {
+            "$ref": "#/$defs/Topic"
+          },
+          "minItems": 1,
+          "title": "Allowed Topics",
+          "type": "array"
+        },
+        "status": {
+          "default": "PENDING",
+          "enum": [
+            "ACTIVE",
+            "PENDING",
+            "COMPLETED"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "allowed_topics"
+      ],
+      "title": "Milestone",
+      "type": "object"
+    },
+    "Topic": {
+      "enum": [
+        "COST",
+        "DEPLOYMENT",
+        "COMPARISON",
+        "RECOMMENDATION",
+        "SERVERLESS",
+        "SECURITY"
+      ],
+      "title": "Topic",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "project_id": {
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "version": {
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "objective": {
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "constraints": {
+      "items": {
+        "$ref": "#/$defs/Constraint"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "milestones": {
+      "items": {
+        "$ref": "#/$defs/Milestone"
+      },
+      "minItems": 1,
+      "title": "Milestones",
+      "type": "array"
+    },
+    "approved_topics": {
+      "items": {
+        "$ref": "#/$defs/Topic"
+      },
+      "minItems": 1,
+      "title": "Approved Topics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_id",
+    "version",
+    "objective",
+    "constraints",
+    "milestones",
+    "approved_topics"
+  ],
+  "title": "GoalContract",
+  "type": "object"
+}

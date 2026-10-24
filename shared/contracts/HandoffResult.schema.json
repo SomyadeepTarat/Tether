@@ -1,0 +1,175 @@
+{
+  "$defs": {
+    "AgentHandoff": {
+      "additionalProperties": false,
+      "properties": {
+        "handoff_id": {
+          "title": "Handoff Id",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "source_agent": {
+          "const": "RESEARCH",
+          "default": "RESEARCH",
+          "title": "Source Agent",
+          "type": "string"
+        },
+        "target_agent": {
+          "const": "REPORT",
+          "default": "REPORT",
+          "title": "Target Agent",
+          "type": "string"
+        },
+        "milestone_id": {
+          "title": "Milestone Id",
+          "type": "string"
+        },
+        "topic": {
+          "$ref": "#/$defs/Topic"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "minItems": 1,
+          "title": "Findings",
+          "type": "array"
+        },
+        "unresolved_questions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Questions",
+          "type": "array"
+        },
+        "completed_work": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Completed Work",
+          "type": "array"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "handoff_id",
+        "project_id",
+        "session_id",
+        "contract_version",
+        "milestone_id",
+        "topic",
+        "findings",
+        "next_action"
+      ],
+      "title": "AgentHandoff",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "AWS",
+            "AZURE",
+            "GCP"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "reference_id": {
+          "title": "Reference Id",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "provider",
+        "reference_id",
+        "summary"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "Topic": {
+      "enum": [
+        "COST",
+        "DEPLOYMENT",
+        "COMPARISON",
+        "RECOMMENDATION",
+        "SERVERLESS",
+        "SECURITY"
+      ],
+      "title": "Topic",
+      "type": "string"
+    },
+    "ValidationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "ALLOW",
+            "REVIEW",
+            "BLOCK"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision",
+        "reasons"
+      ],
+      "title": "ValidationResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "handoff": {
+      "$ref": "#/$defs/AgentHandoff"
+    },
+    "validation": {
+      "$ref": "#/$defs/ValidationResult"
+    },
+    "replayed": {
+      "default": false,
+      "title": "Replayed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "handoff",
+    "validation"
+  ],
+  "title": "HandoffResult",
+  "type": "object"
+}

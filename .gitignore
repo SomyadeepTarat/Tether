@@ -4,7 +4,11 @@ node_modules/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+*.egg-info/
 *.sqlite3*
 .env
-.env.local
+.env.*
+!.env.example
 backend/data/
+runtime/

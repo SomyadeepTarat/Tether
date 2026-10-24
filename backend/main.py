@@ -1,329 +1,366 @@
-"""Local application API. Engine integration contract is documented in shared/ENGINE.md."""
-from contextlib import contextmanager
-from datetime import datetime, timezone
+"""Local product API backed by the merged engine and its authoritative store."""
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 import json
 import os
+import secrets
 import sqlite3
-from backend.inference import configuration, create_client, public_attempts, EngineUnavailable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.responses import JSONResponse
+
+from backend.inference import configuration, create_client
+from backend.store import AppStore, now, prepare_database
+from engine.orchestrator import run_step, run_specialist_step
+from engine.schemas import GoalChange, GoalContract, Milestone, Reference
 
 ROOT = Path(__file__).resolve().parents[1]
-DB = Path(os.environ.get('TETHER_DB', str(ROOT / 'backend/data/tether.sqlite3')))
-if not DB.is_absolute():
-    DB = ROOT / DB
-DB.parent.mkdir(parents=True, exist_ok=True)
-app = FastAPI(title='Tether API', version='0.1.0')
-app.add_middleware(CORSMiddleware, allow_origins=['http://localhost:3000', 'http://127.0.0.1:3000'], allow_methods=['*'], allow_headers=['*'])
+OPERATOR_TOKEN = secrets.token_urlsafe(32)
+ORIGINS = {'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:8000', 'http://127.0.0.1:8000', 'http://testserver'}
+
+
+def db_path():
+    path = Path(os.environ.get('TETHER_DB', str(ROOT / 'backend/data/tether.sqlite3')))
+    return path if path.is_absolute() else ROOT / path
 
 
 @contextmanager
-def database():
-    con = sqlite3.connect(DB, timeout=10)
-    con.row_factory = sqlite3.Row
+def store():
+    current = AppStore(db_path())
     try:
-        con.execute('PRAGMA foreign_keys=ON')
-        yield con
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
+        yield current
     finally:
-        con.close()
+        current.close()
 
 
-with database() as con:
-    con.executescript('''
-    PRAGMA journal_mode=WAL;
-    CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT, created_at TEXT);
-    CREATE TABLE IF NOT EXISTS contracts(project_id TEXT REFERENCES projects(id), version INTEGER, body TEXT, PRIMARY KEY(project_id,version));
-    CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), status TEXT, created_at TEXT);
-    CREATE TABLE IF NOT EXISTS actions(id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), session_id TEXT REFERENCES sessions(id), body TEXT, decision TEXT, reason TEXT, created_at TEXT);
-    CREATE TABLE IF NOT EXISTS artifacts(action_id TEXT PRIMARY KEY REFERENCES actions(id), project_id TEXT REFERENCES projects(id), body TEXT);
-    CREATE TABLE IF NOT EXISTS changes(id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), base_version INTEGER, topic TEXT, status TEXT, created_at TEXT);
-    CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT REFERENCES projects(id), kind TEXT, message TEXT, created_at TEXT);
-    ''')
-    if 'body' not in {r['name'] for r in con.execute('PRAGMA table_info(events)')}:
-        con.execute('ALTER TABLE events ADD COLUMN body TEXT')
-    # A restarted single-process backend cannot still own these in-flight calls.
-    con.execute("UPDATE sessions SET status='FAILED' WHERE status IN ('PLANNING','VALIDATING')")
+@asynccontextmanager
+async def lifespan(app):
+    prepare_database(db_path())
+    with store() as current:
+        current.import_legacy()
+        with current._transaction():
+            current.db.execute("UPDATE app_sessions SET status='FAILED' WHERE status IN ('PLANNING','VALIDATING','HANDOFF')")
+    yield
 
 
-def now():
-    return datetime.now(timezone.utc).isoformat()
+app = FastAPI(title='Tether API', version='0.2.0', lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=list(ORIGINS - {'http://testserver'}), allow_credentials=True, allow_methods=['GET','POST'], allow_headers=['Content-Type'])
+
+
+@app.middleware('http')
+async def local_operator(request: Request, call_next):
+    # Loopback application: the backend grants a same-site HttpOnly operator session.
+    # Actor identity is never supplied by agent output or request JSON.
+    if request.method == 'POST':
+        token = request.cookies.get('tether_operator', '')
+        if not secrets.compare_digest(token, OPERATOR_TOKEN) or request.headers.get('origin') not in ORIGINS:
+            return JSONResponse(status_code=403, content={'detail': 'Open or refresh the local workspace before making changes.'})
+    return await call_next(request)
+
+
+class Input(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+
+
+class CreateProject(Input):
+    name: str = Field(default='Startup cloud comparison', min_length=1, max_length=120)
+    objective: str = Field(default='Compare AWS, Azure, and Google Cloud for a startup. Prioritize cost and deployment simplicity.', min_length=10, max_length=2000)
+
+
+class StartSession(Input):
+    mode: Literal['single', 'specialists'] = 'single'
+
+
+class StepRequest(Input):
+    action_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,100}$')
+
+
+class ChangeRequest(Input):
+    topic: Literal['SERVERLESS'] = 'SERVERLESS'
+
+
+class Decision(Input):
+    decision: Literal['APPROVE', 'REJECT']
 
 
 def uid(prefix):
     return prefix + '-' + uuid4().hex[:12]
 
 
-def event(con, project, kind, message, body=None):
-    con.execute('INSERT INTO events(project_id,kind,message,created_at,body) VALUES(?,?,?,?,?)', (project, kind, message, now(), json.dumps(body) if body is not None else None))
+def references():
+    return [Reference.model_validate(r) for r in json.loads((ROOT / 'scenarios/cloud_snapshot.json').read_text(encoding='utf-8'))['references']]
 
 
-def record_inference(project, session_id, action_id, calls):
-    body = {'session_id': session_id, 'action_id': action_id, 'attempts': public_attempts(calls)}
-    with database() as con:
-        event(con, project, 'INFERENCE_COMPLETED', 'Inference attempts ended; validation and execution are separate outcomes', body)
+def require_project(current, project):
+    try:
+        return current.effective_contract(project)
+    except ValueError as exc:
+        raise HTTPException(404, 'Project not found') from exc
 
 
-def contract(con, project):
-    row = con.execute('SELECT body FROM contracts WHERE project_id=? ORDER BY version DESC LIMIT 1', (project,)).fetchone()
+def require_session(current, session):
+    row = current.db.execute('SELECT id,project,status,created_at,pending_action,mode FROM app_sessions WHERE id=?', (session,)).fetchone()
     if not row:
-        raise HTTPException(404, 'Project not found')
-    return json.loads(row['body'])
+        raise HTTPException(404, 'Session not found')
+    return dict(zip(('id','project_id','status','created_at','pending_action','mode'), row))
 
 
-class CreateProject(BaseModel):
-    name: str = Field(default='Startup cloud comparison', min_length=1, max_length=120)
-    objective: str = Field(default='Compare AWS, Azure, and Google Cloud for a startup. Prioritize cost and deployment simplicity.', min_length=10, max_length=2000)
+def conflict(exc):
+    raise HTTPException(409, str(exc)) from exc
 
 
-class ChangeRequest(BaseModel):
-    topic: Literal['SERVERLESS'] = 'SERVERLESS'
+def active_work(current, project):
+    return current.db.execute("SELECT 1 FROM app_sessions WHERE project=? AND status IN ('PLANNING','VALIDATING','HANDOFF')", (project,)).fetchone()
 
 
-class Decision(BaseModel):
-    decision: Literal['APPROVE', 'REJECT']
-
-
-class Proposal(BaseModel):
-    contract_version: int
-    milestone_id: str
-    topic: str
-    section_id: str = Field(min_length=1, max_length=100)
-    content: str = Field(min_length=1, max_length=15000)
-    reference_ids_used: list[str] = Field(min_length=1)
-    rationale: str = Field(min_length=1, max_length=2000)
+def proposal_view(action):
+    return {'contract_version': action.contract_version, 'milestone_id': action.milestone_id,
+            'topic': action.topic, 'section_id': action.arguments.section_id, 'content': action.arguments.content,
+            'reference_ids_used': action.declared_effects.reference_ids_used, 'rationale': action.rationale}
 
 
 @app.get('/api/health')
-def health():
-    return {'status': 'ok', **configuration(), 'engine_available': (ROOT / 'engine/llm_client.py').exists()}
+def health(response: Response):
+    response.set_cookie('tether_operator', OPERATOR_TOKEN, httponly=True, samesite='strict', path='/', max_age=86400)
+    return {'status':'ok', **configuration(), 'engine_available':True, 'review_approval_available':False}
 
 
 @app.get('/api/projects')
 def projects():
-    with database() as con:
-        return [dict(r) for r in con.execute('SELECT * FROM projects ORDER BY created_at DESC')]
+    with store() as current:
+        return [dict(zip(('id','name','created_at'), r)) for r in current.db.execute('SELECT id,name,created_at FROM app_projects ORDER BY created_at DESC')]
 
 
 @app.post('/api/projects', status_code=201)
 def create_project(body: CreateProject):
     project = uid('P')
-    topics = ['COST', 'DEPLOYMENT', 'COMPARISON', 'RECOMMENDATION']
-    titles = ['Research costs', 'Compare deployment simplicity', 'Create comparison table', 'Produce final recommendation']
-    goal = {'project_id': project, 'version': 1, 'objective': body.objective,
-            'constraints': [{'id': 'C1', 'type': 'SOURCE_RESTRICTION', 'value': 'provided_fixture_only', 'severity': 'HARD'}, {'id': 'C2', 'type': 'NO_UNAUTHORIZED_SCOPE', 'value': True, 'severity': 'HARD'}],
-            'approved_topics': topics, 'milestones': [{'id': f'M{i+1}', 'title': title, 'allowed_topics': [topics[i]]} for i, title in enumerate(titles)]}
-    with database() as con:
-        con.execute('INSERT INTO projects VALUES(?,?,?)', (project, body.name, now()))
-        con.execute('INSERT INTO contracts VALUES(?,?,?)', (project, 1, json.dumps(goal)))
-        event(con, project, 'CONTRACT', 'Goal contract v1 approved and persisted')
-    return {'id': project}
+    template = json.loads((ROOT / 'scenarios/cloud_comparison.json').read_text(encoding='utf-8'))
+    goal = GoalContract.model_validate({**template, 'project_id':project, 'objective':body.objective})
+    with store() as current:
+        # Both approved goal and product metadata are persisted in one transaction.
+        with current._transaction():
+            current.db.execute('INSERT INTO contracts VALUES(?,?,?)', (project,1,goal.model_dump_json()))
+            current.db.execute('INSERT INTO app_projects VALUES(?,?,?)', (project,body.name,now()))
+            current._event(project,'CONTRACT_CREATED',goal.model_dump(mode='json'))
+    return {'id':project}
+
+
+def project_view(current, project):
+    goal = require_project(current, project)
+    meta = current.db.execute('SELECT name,created_at FROM app_projects WHERE id=?', (project,)).fetchone()
+    timeline = current.timeline(project)
+    inference = {}
+    times = {}
+    for e in timeline:
+        if e['kind'] == 'INFERENCE_COMPLETED':
+            body = e['body']
+            key = body['action_id']
+            if key not in inference:
+                inference[key] = {'session_id':body['session_id'], 'action_id':key, 'attempts':[]}
+            inference[key]['attempts'].extend(body['attempts'])
+        body_action = e['body'].get('action')
+        if body_action:
+            times[body_action['action_id']] = e['body'].get('_recorded_at','')
+    actions = []
+    artifacts = []
+    for (key,) in current.db.execute('SELECT id FROM actions WHERE project=? ORDER BY rowid DESC', (project,)):
+        result = current.action_result(key)
+        action = result.action
+        resolution = current.db.execute('SELECT disposition FROM app_resolutions WHERE action_id=?', (key,)).fetchone()
+        actions.append({'id':key, 'session_id':action.session_id, 'body':proposal_view(action), 'action':action.model_dump(mode='json'),
+                        'validation':result.validation.model_dump(mode='json'), 'committed':result.committed,
+                        'decision':result.validation.decision, 'reason':'; '.join(result.validation.reasons) or 'All mandatory checks passed',
+                        'created_at':times.get(key,''), 'inference':inference.get(key), 'resolution':resolution[0] if resolution else None})
+    for (key,) in current.db.execute('SELECT action_id FROM artifacts WHERE project=? ORDER BY section', (project,)):
+        result = current.action_result(key)
+        artifacts.append(proposal_view(result.action))
+    sessions = [dict(zip(('id','project_id','status','created_at','pending_action','mode'), row)) for row in current.db.execute('SELECT id,project,status,created_at,pending_action,mode FROM app_sessions WHERE project=? ORDER BY created_at DESC', (project,))]
+    changes = []
+    for (key,) in current.db.execute('SELECT id FROM changes WHERE project=? ORDER BY rowid DESC', (project,)):
+        saved = current.goal_change(key)
+        change = saved['change']
+        changes.append({'id':key,'topic':', '.join(change['added_topics']),'status':saved['status'], 'base_version':change['base_version']})
+    return {'id':project, 'name':meta[0] if meta else project, 'created_at':meta[1] if meta else '',
+            'contract':goal.model_dump(mode='json'), 'sessions':sessions,'actions':actions,'artifacts':artifacts,
+            'changes':changes,'inference':list(inference.values()), 'legacy_archive_available':bool(current.archive(project)['contracts'])}
 
 
 @app.get('/api/projects/{project}')
 def get_project(project: str):
-    with database() as con:
-        goal = contract(con, project)
-        meta = dict(con.execute('SELECT * FROM projects WHERE id=?', (project,)).fetchone())
-        artifacts = [json.loads(r['body']) for r in con.execute('SELECT body FROM artifacts WHERE project_id=?', (project,))]
-        completed = {a['milestone_id'] for a in artifacts}
-        for m in goal['milestones']:
-            m['status'] = 'COMPLETED' if m['id'] in completed else 'PENDING'
-        pending = next((m for m in goal['milestones'] if m['status'] == 'PENDING'), None)
-        if pending:
-            pending['status'] = 'ACTIVE'
-        inference = {}
-        for r in con.execute("SELECT body FROM events WHERE project_id=? AND kind='INFERENCE_COMPLETED' ORDER BY id", (project,)):
-            if r['body']:
-                telemetry = json.loads(r['body'])
-                inference[telemetry['action_id']] = telemetry
-        return {**meta, 'contract': goal, 'inference': list(inference.values()), 'sessions': [dict(r) for r in con.execute('SELECT * FROM sessions WHERE project_id=? ORDER BY created_at DESC', (project,))],
-                'actions': [{**dict(r), 'body': json.loads(r['body']), 'inference': inference.get(r['id'])} for r in con.execute('SELECT * FROM actions WHERE project_id=? ORDER BY created_at DESC', (project,))],
-                'artifacts': artifacts, 'changes': [dict(r) for r in con.execute('SELECT * FROM changes WHERE project_id=? ORDER BY created_at DESC', (project,))]}
+    with store() as current:
+        return project_view(current,project)
 
 
 @app.get('/api/projects/{project}/contracts')
 def contracts(project: str):
-    with database() as con:
-        contract(con, project)
-        return [json.loads(r['body']) for r in con.execute('SELECT body FROM contracts WHERE project_id=? ORDER BY version DESC', (project,))]
+    with store() as current:
+        require_project(current,project)
+        return [c.model_dump(mode='json') for c in reversed(current.contracts(project))]
 
 
 @app.post('/api/projects/{project}/sessions', status_code=201)
-def start_session(project: str):
-    with database() as con:
-        goal = contract(con, project)
-        active = con.execute("SELECT id FROM sessions WHERE project_id=? AND status IN ('PLANNING','VALIDATING','AWAITING_REVIEW')", (project,)).fetchone()
-        if active:
-            raise HTTPException(409, 'A session is already active')
+def start_session(project: str, body: StartSession):
+    with store() as current:
+        require_project(current,project)
+        if active_work(current,project):
+            raise HTTPException(409,'A step is already running')
         session = uid('S')
-        con.execute('INSERT INTO sessions VALUES(?,?,?,?)', (session, project, 'IDLE', now()))
-        event(con, project, 'RECOVERY', f'Session restored from durable state using contract v{goal["version"]}')
-        return {'id': session, 'status': 'IDLE'}
+        with current._transaction():
+            current.db.execute('INSERT INTO sessions VALUES(?,?)',(session,project))
+            current.db.execute('INSERT INTO checkpoints VALUES(?,?)',(session,json.dumps({'project_id':project,'session_id':session,'contract_version':current.current_contract(project).version,'state':'IDLE'})))
+            current.db.execute('INSERT INTO app_sessions VALUES(?,?,?,?,?,?)',(session,project,'IDLE',now(),None,body.mode))
+            current._event(project,'SESSION_STARTED',{'session_id':session,'mode':body.mode})
+        return {'id':session,'status':'IDLE','mode':body.mode}
 
 
 @app.get('/api/sessions/{session}')
 def get_session(session: str):
-    with database() as con:
-        row = con.execute('SELECT * FROM sessions WHERE id=?', (session,)).fetchone()
-        if not row:
-            raise HTTPException(404, 'Session not found')
-        return dict(row)
+    with store() as current:
+        return {**require_session(current,session), 'checkpoint':current.restore_checkpoint(session)}
 
 
 @app.post('/api/sessions/{session}/step')
-def step(session: str):
-    with database() as con:
-        con.execute('BEGIN IMMEDIATE')
-        row = con.execute('SELECT * FROM sessions WHERE id=?', (session,)).fetchone()
-        if not row:
-            raise HTTPException(404, 'Session not found')
-        project = row['project_id']
-        if con.execute("SELECT 1 FROM sessions WHERE project_id=? AND status IN ('PLANNING','VALIDATING','AWAITING_REVIEW')", (project,)).fetchone():
-            raise HTTPException(409, 'A step or review is already pending')
-        goal = contract(con, project)
-        done = {json.loads(r['body'])['milestone_id'] for r in con.execute('SELECT body FROM artifacts WHERE project_id=?', (project,))}
-        milestone = next((m for m in goal['milestones'] if m['id'] not in done), None)
-        if not milestone:
-            con.execute('UPDATE sessions SET status=? WHERE id=?', ('COMPLETED', session))
-            return {'status': 'COMPLETED'}
-        con.execute('UPDATE sessions SET status=? WHERE id=?', ('PLANNING', session))
-        event(con, project, 'PLANNING', f'Inference requested for {milestone["title"]}')
-        feedback = [dict(r) for r in con.execute('SELECT decision,reason FROM actions WHERE project_id=? ORDER BY created_at DESC LIMIT 3', (project,))]
-    snapshot = json.loads((ROOT / 'scenarios/cloud_snapshot.json').read_text())
-    prompt = json.dumps({'contract': goal, 'active_milestone': milestone, 'snapshot': snapshot, 'previous_validation_feedback': feedback})
-    action = uid('A')
-    client = None
-    try:
-        client = create_client()
-        proposal = client.generate(Proposal, 'Draft a report section supporting the active milestone. Use supplied synthetic evidence only. All numerical values must come from source records. Include SYNTHETIC_DEMONSTRATION in content.', prompt)
-        proposal = Proposal.model_validate(proposal.model_dump())
-    except Exception as exc:
-        if client is not None:
-            record_inference(project, session, action, client.calls)
-        with database() as con:
-            con.execute('UPDATE sessions SET status=? WHERE id=?', ('FAILED', session))
-            event(con, project, 'FAILED', 'Inference failed; no report changes committed', {'session_id': session, 'action_id': action})
-        detail = str(exc) if isinstance(exc, EngineUnavailable) else 'Inference failed. Inspect attempt telemetry and backend provider configuration. No report changes committed.'
-        raise HTTPException(503, detail) from exc
-    record_inference(project, session, action, client.calls)
-    with database() as con:
-        con.execute('BEGIN IMMEDIATE')
-        latest = contract(con, project)
-        reasons = []
-        if proposal.contract_version != latest['version']:
-            reasons.append('Stale contract version')
-        if proposal.milestone_id != milestone['id'] or proposal.topic not in milestone['allowed_topics']:
-            reasons.append('Milestone or topic is not authorized')
-        if not set(proposal.reference_ids_used) <= {r['id'] for r in snapshot['records']}:
-            reasons.append('Unknown source reference')
-        if 'SYNTHETIC_DEMONSTRATION' not in proposal.content:
-            reasons.append('Synthetic evidence label missing')
-        decision = 'BLOCK' if reasons else 'REVIEW'
-        reason = '; '.join(reasons) if reasons else 'Schema, version, milestone and reference checks passed. Human review required until content/evidence validation is integrated.'
-        con.execute('INSERT INTO actions VALUES(?,?,?,?,?,?,?)', (action, project, session, proposal.model_dump_json(), decision, reason, now()))
-        con.execute('UPDATE sessions SET status=? WHERE id=?', ('BLOCKED' if reasons else 'AWAITING_REVIEW', session))
-        event(con, project, decision, reason)
-        return {'action_id': action, 'decision': decision, 'reason': reason}
+def step(session: str, body: StepRequest):
+    with store() as current:
+        # Serialize project execution before opening any model request. No write
+        # transaction remains open during network I/O. Run one API worker locally.
+        with current._transaction():
+            info = require_session(current,session)
+            project = info['project_id']
+            action_id = body.action_id or info['pending_action'] or uid('A')
+            prior = current.action_result(action_id)
+            if prior:
+                if prior.action.session_id != session or prior.action.project_id != project:
+                    raise HTTPException(409,'Action key belongs to another session')
+                return {**prior.model_dump(mode='json'),'replayed':True}
+            if active_work(current,project):
+                raise HTTPException(409,'A step is already running')
+            claim = current.db.execute('SELECT session,mode FROM app_requests WHERE id=?',(action_id,)).fetchone()
+            if claim and claim != (session,info['mode']):
+                raise HTTPException(409,'Action key belongs to another session or mode')
+            current.db.execute('INSERT OR IGNORE INTO app_requests VALUES(?,?,?)',(action_id,session,info['mode']))
+            if any(m.status == 'ACTIVE' for m in current.effective_contract(project).milestones) is False:
+                raise HTTPException(409,'All milestones are complete')
+            current.db.execute("UPDATE app_sessions SET status='PLANNING',pending_action=? WHERE id=?",(action_id,session))
+            current._event(project,'PLANNING',{'session_id':session,'action_id':action_id,'mode':info['mode']})
+        try:
+            # Hosted research/handoff export has not been authorized for this UI.
+            client = create_client('ollama' if info['mode'] == 'specialists' else None)
+            runner = run_specialist_step if info['mode'] == 'specialists' else run_step
+            result = runner(current,client,project,session,references(),action_id)
+            final = result.step if info['mode'] == 'specialists' else result
+            state = result.state if info['mode'] == 'specialists' else ('COMPLETED' if final.committed else 'BLOCKED' if final.validation.decision == 'BLOCK' else 'AWAITING_REVIEW')
+            with current._transaction():
+                current.db.execute('UPDATE app_sessions SET status=?,pending_action=? WHERE id=?',(state,None if final else action_id,session))
+            return result.model_dump(mode='json')
+        except Exception as exc:
+            with current._transaction():
+                current.db.execute("UPDATE app_sessions SET status='FAILED' WHERE id=?",(session,))
+                current._event(project,'FAILED',{'session_id':session,'action_id':action_id,'message':'Inference or engine execution failed; no unvalidated artifact was committed'})
+            raise HTTPException(503,'Engine execution failed. Check provider configuration and persisted inference attempts; retry resumes the same action key.') from exc
 
 
 @app.post('/api/actions/{action}/decision')
 def decide_action(action: str, body: Decision):
-    with database() as con:
-        con.execute('BEGIN IMMEDIATE')
-        row = con.execute('SELECT * FROM actions WHERE id=?', (action,)).fetchone()
-        if not row:
-            raise HTTPException(404, 'Action not found')
-        if row['decision'] != 'REVIEW':
-            raise HTTPException(409, 'Only pending review actions can be resolved')
-        proposal = json.loads(row['body'])
-        if proposal['contract_version'] != contract(con, row['project_id'])['version']:
-            raise HTTPException(409, 'Contract changed; generate a new proposal')
-        approved = body.decision == 'APPROVE'
-        if approved:
-            con.execute('INSERT INTO artifacts VALUES(?,?,?)', (action, row['project_id'], row['body']))
-        con.execute('UPDATE actions SET decision=?,reason=? WHERE id=?', ('ALLOW' if approved else 'BLOCK', 'User ' + body.decision.lower(), action))
-        con.execute('UPDATE sessions SET status=? WHERE id=?', ('IDLE', row['session_id']))
-        event(con, row['project_id'], 'COMMIT' if approved else 'BLOCK', f'User {body.decision.lower()} action {action}')
-        return {'status': 'COMMITTED' if approved else 'BLOCKED'}
+    with store() as current:
+        result = current.action_result(action)
+        if not result:
+            raise HTTPException(404,'Action not found')
+        if result.validation.decision != 'REVIEW':
+            raise HTTPException(409,'Only pending REVIEW actions can be resolved')
+        if body.decision == 'APPROVE':
+            raise HTTPException(409,'Semantic review approval is not implemented in the current engine. No artifact was committed.')
+        with current._transaction():
+            current.db.execute("INSERT OR IGNORE INTO app_resolutions VALUES(?,'REJECTED')",(action,))
+            current.db.execute("UPDATE app_sessions SET status='IDLE' WHERE id=?",(result.action.session_id,))
+            current._event(result.action.project_id,'USER_REJECTED',{'action_id':action,'actor':'local-operator'})
+        return {'status':'REJECTED'}
+
+
+@app.post('/api/projects/{project}/milestones/{milestone}/complete')
+def complete_milestone(project: str, milestone: str):
+    with store() as current:
+        require_project(current,project)
+        if active_work(current,project):
+            raise HTTPException(409,'Finish the running step first')
+        try:
+            return current.complete_milestone(project,milestone,actor='local-operator').model_dump(mode='json')
+        except ValueError as exc:
+            conflict(exc)
 
 
 @app.post('/api/projects/{project}/changes', status_code=201)
 def propose_change(project: str, body: ChangeRequest):
-    with database() as con:
-        goal = contract(con, project)
-        if body.topic in goal['approved_topics']:
-            raise HTTPException(409, 'Topic already approved')
-        if con.execute("SELECT 1 FROM changes WHERE project_id=? AND status='PENDING'", (project,)).fetchone():
-            raise HTTPException(409, 'Resolve the pending change first')
-        change = uid('C')
-        con.execute('INSERT INTO changes VALUES(?,?,?,?,?,?)', (change, project, goal['version'], body.topic, 'PENDING', now()))
-        event(con, project, 'CHANGE', 'Serverless scope extension proposed; approval required')
-        return {'id': change}
+    with store() as current:
+        goal = require_project(current,project)
+        change = GoalChange(change_id=uid('C'),project_id=project,base_version=goal.version,added_topics=[body.topic],
+                            added_milestones=[Milestone(id='M5',title='Compare serverless options',allowed_topics=[body.topic])],
+                            rationale='User requested a serverless comparison')
+        try:
+            current.propose_goal_change(change)
+        except ValueError as exc:
+            conflict(exc)
+        return {'id':change.change_id}
 
 
 @app.post('/api/changes/{change}/decision')
 def decide_change(change: str, body: Decision):
-    with database() as con:
-        con.execute('BEGIN IMMEDIATE')
-        row = con.execute('SELECT * FROM changes WHERE id=?', (change,)).fetchone()
-        if not row:
-            raise HTTPException(404, 'Change not found')
-        if row['status'] != 'PENDING':
-            raise HTTPException(409, 'Change already resolved')
-        goal = contract(con, row['project_id'])
-        if goal['version'] != row['base_version']:
-            raise HTTPException(409, 'Change is based on a stale contract')
-        if con.execute("SELECT 1 FROM sessions WHERE project_id=? AND status IN ('PLANNING','VALIDATING','AWAITING_REVIEW')", (row['project_id'],)).fetchone():
-            raise HTTPException(409, 'Finish the active step or review before changing the contract')
-        if body.decision == 'APPROVE':
-            goal['version'] += 1
-            goal['approved_topics'].append(row['topic'])
-            goal['milestones'].append({'id': 'M5', 'title': 'Compare serverless options', 'allowed_topics': ['SERVERLESS']})
-            con.execute('INSERT INTO contracts VALUES(?,?,?)', (row['project_id'], goal['version'], json.dumps(goal)))
-        con.execute('UPDATE changes SET status=? WHERE id=?', (body.decision, change))
-        event(con, row['project_id'], 'CONTRACT', f'Goal change {body.decision.lower()}; active contract v{goal["version"]}')
-        return {'version': goal['version']}
+    with store() as current:
+        try:
+            saved = current.goal_change(change)
+        except ValueError as exc:
+            raise HTTPException(404,'Change not found') from exc
+        if active_work(current,saved['change']['project_id']):
+            raise HTTPException(409,'Finish the running step first')
+        try:
+            current.decide_goal_change(change,approve=body.decision == 'APPROVE',actor='local-operator')
+        except ValueError as exc:
+            conflict(exc)
+        return {'version':current.current_contract(saved['change']['project_id']).version}
 
 
 @app.get('/api/projects/{project}/timeline')
 def timeline(project: str):
-    with database() as con:
-        contract(con, project)
-        return [{**dict(r), 'body': json.loads(r['body']) if r['body'] else None} for r in con.execute('SELECT * FROM events WHERE project_id=? ORDER BY id DESC', (project,))]
+    with store() as current:
+        require_project(current,project)
+        return [{**e,'message':e['body'].get('message') or e['kind'].replace('_',' ').capitalize(), 'created_at':e['body'].get('_recorded_at','')} for e in reversed(current.timeline(project))]
 
 
 @app.get('/api/projects/{project}/report')
 def report(project: str):
-    return {'sections': get_project(project)['artifacts'], 'label': 'SYNTHETIC_DEMONSTRATION'}
+    return {'sections':get_project(project)['artifacts'],'label':'SYNTHETIC_DEMONSTRATION'}
 
 
 @app.get('/api/projects/{project}/metrics')
 def metrics(project: str):
     get_project(project)
-    return {'runs': [], 'message': 'No evaluation runs recorded. Engine evaluator integration pending.'}
+    return {'runs':[], 'message':'No independent evaluation runs recorded.'}
 
 
 @app.get('/api/sessions/{session}/handoffs')
 def handoffs(session: str):
-    get_session(session)
-    return {'handoffs': [], 'mode': 'SINGLE_AGENT', 'message': 'Specialist handoff integration pending.'}
+    with store() as current:
+        info = require_session(current,session)
+        return {'handoffs':[h.model_dump(mode='json') for h in current.handoffs(session)],'mode':info['mode']}
 
 
 @app.post('/api/projects/{project}/recover')
 def recover(project: str):
-    with database() as con:
-        con.execute('BEGIN IMMEDIATE')
-        contract(con, project)
-        if con.execute("SELECT 1 FROM sessions WHERE project_id=? AND status IN ('PLANNING','VALIDATING')", (project,)).fetchone():
-            raise HTTPException(409, 'A model request is still running')
-        event(con, project, 'RECOVERY', 'Durable project state restored; committed artifacts preserved')
-    return get_project(project)
+    with store() as current:
+        require_project(current,project)
+        if active_work(current,project):
+            raise HTTPException(409,'A model request is still running')
+        with current._transaction():
+            current._event(project,'RECOVERY',{'message':'Current contract, report and checkpoints restored without inference'})
+        return project_view(current,project)
+
+
+@app.get('/api/projects/{project}/archive')
+def archive(project: str):
+    with store() as current:
+        require_project(current,project)
+        return current.archive(project)
