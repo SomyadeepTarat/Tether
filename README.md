@@ -24,7 +24,7 @@ Open http://127.0.0.1:3000. API docs: http://127.0.0.1:8000/docs. Use a single b
 
 ## Provider configuration
 
-Set variables in the backend environment. .env files are not loaded automatically; .env.example contains placeholders only. Credentials never belong in NEXT_PUBLIC variables, tracked files or persisted events. Use a Groq Free plan account without enabling paid billing.
+FastAPI loads backend/.env and then the repository-root .env at startup. Explicit shell/service environment variables take precedence. Copy .env.example to .env and add GROQ_API_KEY locally, then restart FastAPI. The standalone engine CLI still uses its process environment; it does not load these files automatically. Credentials never belong in NEXT_PUBLIC variables, tracked files or persisted events. Use a Groq Free plan account without enabling paid billing.
 
 - TETHER_PROVIDER=groq (default): hosted primary with eligible-failure Ollama backup.
 - TETHER_PROVIDER=groq-only: no fallback, for honest provider-only measurements.

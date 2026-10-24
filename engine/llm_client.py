@@ -67,7 +67,7 @@ class _StructuredClient:
             try:
                 if self.provider == "groq" and not self.api_key:
                     raise InferenceError(self.provider, "missing_credentials")
-                headers = {"Content-Type": "application/json"}
+                headers = {"Content-Type": "application/json", "User-Agent": "Tether/0.2"}
                 if self.provider == "groq":
                     headers["Authorization"] = f"Bearer {self.api_key}"
                 request = Request(self.endpoint, data=json.dumps(payload).encode(), headers=headers)

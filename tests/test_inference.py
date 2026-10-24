@@ -25,6 +25,7 @@ def test_groq_success_and_secret_not_logged(monkeypatch):
     def respond(request,timeout):
         payload=json.loads(request.data)
         assert request.get_header('Authorization') == 'Bearer test-secret'
+        assert request.get_header('User-agent') == 'Tether/0.2'
         assert payload['model']=='openai/gpt-oss-20b'
         assert payload['reasoning_effort']=='low'
         assert payload['response_format']['json_schema']['strict'] is True
