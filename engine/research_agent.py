@@ -18,7 +18,7 @@ def run_research_agent(client, contract, session_id, references, handoff_id):
         raise ValueError("No active milestone")
     topic = active.allowed_topics[0]
     payload = {"handoff_id": handoff_id, "project_id": contract.project_id,
-               "session_id": session_id, "contract_version": contract.version,
+               "session_id": session_id, "contract_version": contract.version, "contract": contract.model_dump(mode="json"),
                "milestone_id": active.id, "topic": topic,
                "references": [r.model_dump(mode="json") for r in references
                               if source_authorized(r, topic, contract)]}

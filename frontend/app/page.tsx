@@ -5,6 +5,7 @@ import {Button} from '@/components/ui/button';
 import {Badge,Empty,InferenceDetails,MilestoneList,stamp,WorkflowBoard} from '@/components/workspace';
 import {api} from '@/lib/api';
 import {ReportContent,sectionTitle} from '@/components/report-content';
+import {DemoGuide,SharedContract} from '@/components/demo-guide';
 import {Evaluation} from '@/components/evaluation';
 import type {Action,AuditEvent,Contract,Project,ProjectSummary,EngineConfig,Handoff,EvaluationRun,Reference} from '@/lib/types';
 
@@ -75,6 +76,11 @@ export default function Home(){
     setBusy(true);setError('');
     try{await work();await refresh(project?.id);}catch(e){setError(e instanceof Error?e.message:'Something went wrong');if(project)await refresh(project.id).catch(()=>{});}finally{setBusy(false);}
   }
+  function setupWorkflowDemo(){
+    setKind('cloud_demo');setMode('specialists');setName('Tether workflow demonstration');
+    setObjective('Compare AWS, Azure, and GCP for a small startup, prioritizing cost and deployment simplicity using only the supplied synthetic snapshot.');
+    setCreateOpen(true);
+  }
   async function create(){
     setBusy(true);setError('');
     try{const p=await api<{id:string}>('/projects',{name,objective,auto_start:true,mode:kind==='draft'?'single':mode,kind});setCreateOpen(false);setNotice('Project created. Your request is being processed; you can follow progress below.');await refresh(p.id);setName('');setObjective('');}catch(e){setError(e instanceof Error?e.message:'Project creation failed');}finally{setBusy(false);}
@@ -131,12 +137,15 @@ export default function Home(){
 
         {notice&&<div className="notice" role="status"><Check size={17}/><span>{notice}</span><button aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={15}/></button></div>}
         {error&&<div className="error" role="alert"><ShieldX size={17}/><span>{error}</span><button aria-label="Dismiss error" onClick={()=>setError('')}><X size={15}/></button></div>}
+        <DemoGuide onCreate={setupWorkflowDemo}/>
         {loading?<div className="loading-state"><LoaderCircle className="spin" size={24}/><p>Opening your workspace...</p></div>:!project?<section className="welcome panel"><span className="empty-icon"><Workflow size={28}/></span><h2>Create a project</h2><p>Define your goal, generate a proposal, and review the output.</p><Button onClick={()=>setCreateOpen(true)}><Plus size={16}/>Create your first project<ArrowRight size={15}/></Button><div className="welcome-features"><span><ShieldCheck size={15}/>Controlled execution</span><span><GitBranch size={15}/>Versioned goals</span><span><History size={15}/>Saved progress</span></div></section>:<>
 
         <div className="project-toolbar"><div><span className="project-dot color-0"/><select className="project-switcher" aria-label="Active project" disabled={busy} value={project.id} onChange={e=>void chooseProject(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><Badge tone="green">Contract v{project.contract.version}</Badge></div><span><span className="dot"/>{config?.provider==='ollama'?'Local inference':config?.provider==='groq-only'?'Groq only':'Groq + Ollama backup'}</span></div>
 
         {project.workflow&&<section className={`live-status ${running?'is-running':''}`} role="status" aria-live="polite">{running?<LoaderCircle size={20} className="spin"/>:<ShieldCheck size={20}/>}<div><strong>{running?'Working on your goal':pending?'Your review is needed':project.workflow.state.replaceAll('_',' ').toLowerCase()}</strong><p>{project.workflow.message}</p></div>{project.workflow.state==='BLOCKED'&&<Button variant="outline" onClick={()=>navigate('Drift inspector')}>See why it was blocked<ArrowRight size={14}/></Button>}{pending>0&&<Button onClick={()=>researchNeedsReview?scrollTo('handoffs'):navigate('Drift inspector')}>Review now<ArrowRight size={14}/></Button>}</section>}
         {tab==='Command center'&&<>
+          {isDraft&&<div className="provider-notice"><span>This is a single-response project. For multiple milestones, agent handoffs and safety examples, open the workflow demo guide above.</span><Button variant="outline" onClick={setupWorkflowDemo}>Set up workflow demo</Button></div>}
+          <SharedContract contract={project.contract} specialists={latest?.mode==='specialists'}/>
           <details className="summary-details"><summary>Project statistics · {completed} of {project.contract.milestones.length} milestones complete · {pending} awaiting review</summary><section className="stats" aria-label="Project overview">
             <div className="stat-card"><span className="stat-label"><Flag size={14}/>Milestones</span><strong>{completed}<small>/{project.contract.milestones.length}</small></strong><div className="stat-bottom"><span>{project.contract.milestones.length-completed} remaining</span><div className="mini-bars green">{Array.from({length:12},(_,i)=><i key={i} className={i<Math.round(completed/project.contract.milestones.length*12)?'filled':''}/>)}</div></div></div>
             <div className="stat-card"><span className="stat-label"><FileText size={14}/>Saved sections</span><strong>{project.artifacts.length}</strong><div className="stat-bottom"><span>Validated & saved</span><span className="stat-symbol blue"><FileText size={24}/></span></div></div>

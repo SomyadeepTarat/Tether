@@ -579,3 +579,31 @@ def test_general_request_review_feedback_and_completion(web):
         view = web.get(f'/api/projects/{project}').json()
         assert view['workflow']['state'] == 'COMPLETED'
         assert len(view['artifacts']) == 1
+
+
+def test_safety_rehearsal_uses_validator_without_inference_or_project_writes(web):
+    before = web.get('/api/projects').json()
+    with patch.object(api, 'create_client', side_effect=AssertionError('No inference in rehearsal')):
+        response = web.get('/api/demo/safety-examples')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['provider_calls'] == 0 and not body['persisted']
+    assert [e['decision'] for e in body['examples']] == ['ALLOW', 'REVIEW', 'BLOCK']
+    assert any('unauthorized topic' in r for r in body['examples'][2]['reasons'])
+    assert web.get('/api/projects').json() == before
+
+
+def test_research_receives_same_full_contract_as_report():
+    from engine.research_agent import run_research_agent
+    from engine.report_agent import plan_next_action
+    from engine.schemas import GoalContract
+    contract = GoalContract.model_validate_json((api.ROOT / 'scenarios/cloud_comparison.json').read_text())
+    payloads = []
+    class Capture:
+        def generate(self, schema, system, prompt):
+            payloads.append(json.loads(prompt))
+            return None
+    client = Capture()
+    run_research_agent(client, contract, 'S', api.references(), 'H')
+    plan_next_action(client, contract, 'S', api.references(), 'A')
+    assert payloads[0]['contract'] == payloads[1]['contract'] == contract.model_dump(mode='json')

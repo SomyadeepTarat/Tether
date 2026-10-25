@@ -613,3 +613,9 @@ def revise_action(action: str, body: RevisionRequest, background_tasks: Backgrou
         current._event(result.action.project_id, 'REVISION_REQUESTED', {'action_id':action, 'message':body.feedback})
     background_tasks.add_task(drive_workflow, session)
     return {'status':'REVISING', 'session_id':session}
+
+
+@app.get('/api/demo/safety-examples')
+def demo_safety_examples():
+    from backend.demo import safety_examples
+    return safety_examples()

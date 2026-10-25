@@ -12,3 +12,4 @@ __pycache__/
 !.env.example
 backend/data/
 runtime/
+.presentation-build/
